@@ -1,12 +1,12 @@
 # Stage 1: Build
 FROM golang:1.26-alpine AS build
-RUN apk add --no-cache gcc musl-dev
+RUN apk add --no-cache gcc musl-dev sqlite-dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=1 GOOS=linux go build \
+RUN CGO_ENABLED=1 CGO_CFLAGS="-D_LARGEFILE64_SOURCE" GOOS=linux go build \
     -ldflags "-s -w -X main.version=${VERSION}" \
     -o /graph ./cmd/graph
 

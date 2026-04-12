@@ -15,18 +15,26 @@ import (
 
 	"github.com/luxfi/graph/resolvers/ai"
 	"github.com/luxfi/graph/resolvers/bridge"
+	"github.com/luxfi/graph/resolvers/dao"
+	"github.com/luxfi/graph/resolvers/derivatives"
 	"github.com/luxfi/graph/resolvers/dex"
+	"github.com/luxfi/graph/resolvers/did"
 	"github.com/luxfi/graph/resolvers/exchange"
 	"github.com/luxfi/graph/resolvers/fhe"
+	"github.com/luxfi/graph/resolvers/governance"
 	"github.com/luxfi/graph/resolvers/identity"
 	"github.com/luxfi/graph/resolvers/key"
+	"github.com/luxfi/graph/resolvers/liquid"
 	"github.com/luxfi/graph/resolvers/oracle"
 	"github.com/luxfi/graph/resolvers/platform"
 	"github.com/luxfi/graph/resolvers/precompile"
+	"github.com/luxfi/graph/resolvers/prediction"
 	"github.com/luxfi/graph/resolvers/privacy"
 	"github.com/luxfi/graph/resolvers/quantum"
 	"github.com/luxfi/graph/resolvers/relay"
+	"github.com/luxfi/graph/resolvers/securities"
 	"github.com/luxfi/graph/resolvers/servicenode"
+	"github.com/luxfi/graph/resolvers/treasury"
 	"github.com/luxfi/graph/storage"
 )
 
@@ -157,6 +165,30 @@ func (e *Engine) LoadBuiltin(name string) error {
 	case "precompile", "precompiles":
 		e.registerChain(precompile.Register)
 		return nil
+	case "governance":
+		e.registerChain(governance.Register)
+		return nil
+	case "dao":
+		e.registerChain(dao.Register)
+		return nil
+	case "treasury":
+		e.registerChain(treasury.Register)
+		return nil
+	case "liquid", "liquid-staking":
+		e.registerChain(liquid.Register)
+		return nil
+	case "did", "did-registry":
+		e.registerChain(did.Register)
+		return nil
+	case "prediction", "prediction-market":
+		e.registerChain(prediction.Register)
+		return nil
+	case "securities", "security-token":
+		e.registerChain(securities.Register)
+		return nil
+	case "derivatives", "futures", "options":
+		e.registerChain(derivatives.Register)
+		return nil
 	case "all":
 		e.registerAMMResolvers()
 		e.registerV4Resolvers()
@@ -176,6 +208,14 @@ func (e *Engine) LoadBuiltin(name string) error {
 		e.registerChain(relay.Register)
 		e.registerChain(servicenode.Register)
 		e.registerChain(precompile.Register)
+		e.registerChain(governance.Register)
+		e.registerChain(dao.Register)
+		e.registerChain(treasury.Register)
+		e.registerChain(liquid.Register)
+		e.registerChain(did.Register)
+		e.registerChain(prediction.Register)
+		e.registerChain(securities.Register)
+		e.registerChain(derivatives.Register)
 		return nil
 	case "erc20":
 		e.registerERC20Resolvers()
