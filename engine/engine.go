@@ -25,6 +25,8 @@ import (
 	"github.com/luxfi/graph/resolvers/identity"
 	"github.com/luxfi/graph/resolvers/key"
 	"github.com/luxfi/graph/resolvers/liquid"
+	"github.com/luxfi/graph/resolvers/liquidprotocol"
+	"github.com/luxfi/graph/resolvers/liquidity"
 	"github.com/luxfi/graph/resolvers/oracle"
 	"github.com/luxfi/graph/resolvers/platform"
 	"github.com/luxfi/graph/resolvers/precompile"
@@ -177,6 +179,12 @@ func (e *Engine) LoadBuiltin(name string) error {
 	case "liquid", "liquid-staking":
 		e.registerChain(liquid.Register)
 		return nil
+	case "liquidity", "liquidity-protocol", "omnichain":
+		e.registerChain(liquidity.Register)
+		return nil
+	case "liquid-protocol", "teleport", "liquid-vault":
+		e.registerChain(liquidprotocol.Register)
+		return nil
 	case "did", "did-registry":
 		e.registerChain(did.Register)
 		return nil
@@ -216,6 +224,8 @@ func (e *Engine) LoadBuiltin(name string) error {
 		e.registerChain(prediction.Register)
 		e.registerChain(securities.Register)
 		e.registerChain(derivatives.Register)
+		e.registerChain(liquidity.Register)
+		e.registerChain(liquidprotocol.Register)
 		return nil
 	case "erc20":
 		e.registerERC20Resolvers()
