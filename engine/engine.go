@@ -27,6 +27,7 @@ import (
 	"github.com/luxfi/graph/resolvers/liquid"
 	"github.com/luxfi/graph/resolvers/liquidprotocol"
 	"github.com/luxfi/graph/resolvers/liquidity"
+	"github.com/luxfi/graph/resolvers/mpc"
 	"github.com/luxfi/graph/resolvers/oracle"
 	"github.com/luxfi/graph/resolvers/platform"
 	"github.com/luxfi/graph/resolvers/precompile"
@@ -37,6 +38,8 @@ import (
 	"github.com/luxfi/graph/resolvers/securities"
 	"github.com/luxfi/graph/resolvers/servicenode"
 	"github.com/luxfi/graph/resolvers/treasury"
+	"github.com/luxfi/graph/resolvers/utxo"
+	"github.com/luxfi/graph/resolvers/zk"
 	"github.com/luxfi/graph/storage"
 )
 
@@ -137,10 +140,19 @@ func (e *Engine) LoadBuiltin(name string) error {
 	case "exchange", "xchain":
 		e.registerChain(exchange.Register)
 		return nil
+	case "utxo":
+		e.registerChain(utxo.Register)
+		return nil
+	case "zk", "zchain":
+		e.registerChain(zk.Register)
+		return nil
+	case "mpc", "mchain":
+		e.registerChain(mpc.Register)
+		return nil
 	case "bridge", "bchain":
 		e.registerChain(bridge.Register)
 		return nil
-	case "privacy", "zchain":
+	case "privacy":
 		e.registerChain(privacy.Register)
 		return nil
 	case "quantum", "qchain":
@@ -206,14 +218,17 @@ func (e *Engine) LoadBuiltin(name string) error {
 		e.registerChain(fhe.Register)
 		e.registerChain(platform.Register)
 		e.registerChain(exchange.Register)
+		e.registerChain(utxo.Register)
 		e.registerChain(bridge.Register)
 		e.registerChain(privacy.Register)
 		e.registerChain(quantum.Register)
 		e.registerChain(key.Register)
+		e.registerChain(mpc.Register)
 		e.registerChain(ai.Register)
 		e.registerChain(identity.Register)
 		e.registerChain(oracle.Register)
 		e.registerChain(relay.Register)
+		e.registerChain(zk.Register)
 		e.registerChain(servicenode.Register)
 		e.registerChain(precompile.Register)
 		e.registerChain(governance.Register)
