@@ -155,5 +155,5 @@ func pl(args map[string]interface{}) int {
 	if l, ok := args["first"]; ok {
 		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
 	}
-	return limit
+	return min(limit, 1000)
 }
