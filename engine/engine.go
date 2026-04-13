@@ -1,6 +1,6 @@
 // Package engine implements the GraphQL query execution engine.
 //
-// Extracted from node/vms/graphvm — same resolvers, no consensus deps.
+// Extracted from chains/graphvm — same resolvers, no consensus deps.
 // Reads from local storage (SQLite/ZapDB), serves GraphQL queries.
 package engine
 
