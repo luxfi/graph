@@ -126,11 +126,15 @@ func main() {
 
 	m := &metrics{}
 
-	// HTTP server
+	// HTTP server — standalone: /v1/graph, unified by explorer: /v1/explorer/graphql
+	prefix := os.Getenv("GRAPH_PREFIX")
+	if prefix == "" {
+		prefix = "/v1/graph"
+	}
 	mux := http.NewServeMux()
 
 	// GraphQL endpoint with MaxBytesReader (10MB) and metrics tracking
-	mux.HandleFunc("POST /graphql", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST "+prefix+"/graphql", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB
 		m.queryCount.Add(1)
 		m.blockHeight.Store(int64(idx.Status().LatestBlock))
@@ -150,15 +154,15 @@ func main() {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	mux.HandleFunc("GET /graphql", eng.HandleGraphiQL)
+	mux.HandleFunc("GET "+prefix+"/graphql", eng.HandleGraphiQL)
 
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+prefix+"/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		status := idx.Status()
 		fmt.Fprintf(w, `{"status":"ok","block":%d,"indexed":%d}`, status.LatestBlock, status.IndexedEvents)
 	})
 
-	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+prefix+"/ready", func(w http.ResponseWriter, r *http.Request) {
 		status := idx.Status()
 		w.Header().Set("Content-Type", "application/json")
 		if status.LatestBlock == 0 {
@@ -169,11 +173,11 @@ func main() {
 		fmt.Fprintf(w, `{"ready":true,"block":%d}`, status.LatestBlock)
 	})
 
-	mux.HandleFunc("GET /metrics", m.handleMetrics)
+	mux.HandleFunc("GET "+prefix+"/metrics", m.handleMetrics)
 
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+prefix+"/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"name":"graph","version":"%s","graphql":"/graphql"}`, version)
+		fmt.Fprintf(w, `{"name":"graph","version":"%s","graphql":"%s/graphql"}`, version, prefix)
 	})
 
 	// Middleware stack: security headers + CORS -> request logging -> rate limiting
