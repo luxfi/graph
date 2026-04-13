@@ -66,5 +66,5 @@ func resolvePrivacyPools(_ context.Context, s *storage.Store, args map[string]in
 func pl(args map[string]interface{}) int {
 	limit := 100
 	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
-	return limit
+	return min(limit, 1000)
 }
