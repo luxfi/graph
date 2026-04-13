@@ -24,7 +24,7 @@ func (e *Engine) resolveBlocks(ctx context.Context, s *storage.Store, args map[s
 	if l, ok := args["first"]; ok {
 		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
 	}
-	return s.GetBlocks(ctx, limit)
+	return s.GetBlocks(ctx, min(limit, 1000))
 }
 
 func (e *Engine) resolveTransaction(ctx context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
