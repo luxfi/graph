@@ -126,10 +126,10 @@ func main() {
 
 	m := &metrics{}
 
-	// HTTP server — standalone: /v1/graph, unified by explorer: /v1/explorer/graphql
+	// All components mount under /v1/explorer. Override via GRAPH_PREFIX.
 	prefix := os.Getenv("GRAPH_PREFIX")
 	if prefix == "" {
-		prefix = "/v1/graph"
+		prefix = "/v1/explorer"
 	}
 	mux := http.NewServeMux()
 
