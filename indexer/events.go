@@ -48,6 +48,114 @@ const (
 	SigFlash = "0xbdbdb71d7860376ba52b25a5028beea23581364a40522f6bcfb86bb1f2dca633"
 )
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ERC-3643 (T-REX) `IToken` events
+// ─────────────────────────────────────────────────────────────────────────────
+const (
+	// AddressFrozen(address indexed user, bool indexed isFrozen, address indexed owner)
+	SigAddressFrozen = "0x7fa523c84ab8d7fc5b72f08b9e46dbbf10c39e119a075b3e317002d14bc9f436"
+
+	// TokensFrozen(address indexed user, uint256 amount)
+	SigTokensFrozen = "0xa065e63c631c86f1b9f66a4a2f63f2093bf1c2168d23290259dbd969e0222a45"
+
+	// TokensUnfrozen(address indexed user, uint256 amount)
+	SigTokensUnfrozen = "0x9bed35cb62ad0dba04f9d5bfee4b5bc91443e77da8a65c4c84834c51bb08b0d6"
+
+	// Paused(address user) — T-REX token pause
+	SigSecurityPaused = "0x62e78cea01bee320cd4e420270b5ea74000d11b0c9f74754ebdbfc544b05a258"
+
+	// Unpaused(address user)
+	SigSecurityUnpaused = "0x5db9ee0a495bf2e6ff9c91a7834c1ba4fdd244a5e8aa4e537bd38aeae4b073aa"
+
+	// RecoverySuccess(address indexed lostWallet, address indexed newWallet, address indexed investorOnchainID)
+	SigRecoverySuccess = "0xf0c9129a94f30f1caaceb63e44b9811d0a3edf1d6c23757f346093af5553fed0"
+
+	// UpdatedTokenInformation(string indexed name, string indexed symbol, uint8 decimals, string version, address indexed onchainID)
+	SigUpdatedTokenInformation = "0x6a1105ac8148a3c319adbc369f9072573e8a11d3a3d195e067e7c40767ec54d1"
+
+	// IdentityRegistryAdded(address indexed identityRegistry)
+	SigIdentityRegistryAdded = "0xd2be862d755bca7e0d39772b2cab3a5578da9c285f69199f4c063c2294a7f36c"
+
+	// ComplianceAdded(address indexed compliance)
+	SigComplianceAdded = "0x7f3a888862559648ec01d97deb7b5012bff86dc91e654a1de397170db40e35b6"
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ERC-3643 IdentityRegistry / IdentityRegistryStorage
+// ─────────────────────────────────────────────────────────────────────────────
+const (
+	SigIdentityRegistered = "0x6ae73635c50d24a45af6fbd5e016ac4bed179addbc8bf24e04ff0fcc6d33af19"
+	SigIdentityRemoved    = "0x59d6590e225b81befe259af056324092801080acbb7feab310eb34678871f327"
+	SigIdentityUpdated    = "0xe98082932c8056a0f514da9104e4a66bc2cbaef102ad59d90c4b24220ebf6010"
+	SigCountryUpdated     = "0x04ed3b726495c2dca1ff1215d9ca54e1a4030abb5e82b0f6ce55702416cee853"
+	SigIdentityStored     = "0x0030dea7e9c9afaa2e3c9810f2fc9b5181f1bad74ca5a8db85f746a33585e747"
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ONCHAINID  — ERC-734 (key mgmt) + ERC-735 (claims)
+// ─────────────────────────────────────────────────────────────────────────────
+const (
+	// ClaimAdded/Removed/Changed(bytes32 indexed claimId, uint256 indexed topic, uint256 scheme, address indexed issuer, bytes signature, bytes data, string uri)
+	SigClaimAdded   = "0x46149b18aa084502c3f12bc75e19eda8bda8d102b82cce8474677a6d0d5f43c5"
+	SigClaimRemoved = "0x3cf57863a89432c61c4a27073c6ee39e8a764bff5a05aebfbcdcdc80b2e6130a"
+	SigClaimChanged = "0x3bab293fc00db832d7619a9299914251b8747c036867ec056cbd506f60135b13"
+
+	// KeyAdded/Removed(bytes32 indexed key, uint256 indexed purpose, uint256 indexed keyType)
+	SigKeyAdded   = "0x480000bb1edad8ca1470381cc334b1917fbd51c6531f3a623ea8e0ec7e38a6e9"
+	SigKeyRemoved = "0x585a4aef50f8267a92b32412b331b20f7f8b96f2245b253b9cc50dcc621d3397"
+
+	// Approved(uint256 indexed executionId, bool approved)
+	SigOnchainIdApproved = "0xb3932da477fe5d6c8ff2eafef050c0f3a1af18fc07121001482600f36f3715d8"
+
+	// Executed(uint256 indexed executionId, address indexed to, uint256 indexed value, bytes data)
+	SigOnchainIdExecuted = "0x1f920dbda597d7bf95035464170fa58d0a4b57f13a1c315ace6793b9f63688b8"
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ERC-3643 TrustedIssuersRegistry / ClaimTopicsRegistry
+// ─────────────────────────────────────────────────────────────────────────────
+const (
+	SigTrustedIssuerAdded   = "0xfedc33fd34859594822c0ff6f3f4f9fc279cc6d5cae53068f706a088e4500872"
+	SigTrustedIssuerRemoved = "0x2214ded40113cc3fb63fc206cafee88270b0a903dac7245d54efdde30ebb0321"
+	SigClaimTopicsUpdated   = "0xec753cfc52044f61676f18a11e500093a9f2b1cd5e4942bc476f2b0438159bcf"
+	SigClaimTopicAdded      = "0x01c928b7f7ade2949e92366aa9454dbef3a416b731cf6ec786ba9595bbd814d6"
+	SigClaimTopicRemoved    = "0x0b1381093c776453c1bbe54fd68be1b235c65db61d099cb50d194b2991e0eec5"
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ERC-3643 ModularCompliance + IModule
+// ─────────────────────────────────────────────────────────────────────────────
+const (
+	SigModuleAdded       = "0xead6a006345da1073a106d5f32372d2d2204f46cb0b4bca8f5ebafcbbed12b8a"
+	SigModuleRemoved     = "0x0a1ee69f55c33d8467c69ca59ce2007a737a88603d75392972520bf67cb513b8"
+	SigTokenBound        = "0x2de35142b19ed5a07796cf30791959c592018f70b1d2d7c460eef8ffe713692b"
+	SigTokenUnbound      = "0x28a4ca7134a3b3f9aff286e79ad3daadb4a06d1b43d037a3a98bdc074edd9b7a"
+	SigModuleInteraction = "0x20d79de70adcc6e9353d8a9a5646b46dc352710d0a310b1ad1f67faeca7ef891"
+)
+
+// SecuritiesTopics returns every topic0 indexed by the securities resolvers.
+// Use this when constructing eth_getLogs filters or extending knownTopics().
+func SecuritiesTopics() []string {
+	return []string{
+		// IToken
+		SigAddressFrozen, SigTokensFrozen, SigTokensUnfrozen,
+		SigSecurityPaused, SigSecurityUnpaused, SigRecoverySuccess,
+		SigUpdatedTokenInformation, SigIdentityRegistryAdded, SigComplianceAdded,
+		// IdentityRegistry / Storage
+		SigIdentityRegistered, SigIdentityRemoved, SigIdentityUpdated,
+		SigCountryUpdated, SigIdentityStored,
+		// ONCHAINID
+		SigClaimAdded, SigClaimRemoved, SigClaimChanged,
+		SigKeyAdded, SigKeyRemoved,
+		SigOnchainIdApproved, SigOnchainIdExecuted,
+		// Trusted issuers / topics registries
+		SigTrustedIssuerAdded, SigTrustedIssuerRemoved, SigClaimTopicsUpdated,
+		SigClaimTopicAdded, SigClaimTopicRemoved,
+		// ModularCompliance + IModule
+		SigModuleAdded, SigModuleRemoved, SigTokenBound, SigTokenUnbound, SigModuleInteraction,
+	}
+}
+
 // V4 events (PoolManager singleton pattern)
 const (
 	// Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)
