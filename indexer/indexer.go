@@ -134,12 +134,15 @@ func parseHexUint64(s string) (uint64, error) {
 
 // knownTopics returns all event topic0s we want to filter for.
 func knownTopics() []string {
-	return []string{
+	topics := []string{
+		// AMM (V2/V3/V4)
 		SigPairCreated, SigSwapV2, SigMintV2, SigBurnV2, SigSync, SigTransfer,
 		SigPoolCreated, SigInitialize, SigSwapV3, SigMintV3, SigBurnV3,
 		SigCollect, SigFlash,
 		SigInitializeV4, SigModifyLiquidity, SigSwapV4,
 	}
+	// Securities — full ERC-3643 + ONCHAINID surface.
+	return append(topics, SecuritiesTopics()...)
 }
 
 // logEntry is a decoded eth_getLogs result entry.
@@ -240,6 +243,70 @@ func (idx *Indexer) processLog(l *logEntry) {
 		SigCollect, SigFlash, SigInitialize,
 		SigInitializeV4, SigModifyLiquidity, SigSwapV4:
 		// Recognized but storage for these types not yet wired
+
+	// ── ERC-3643 IToken ───────────────────────────────────────────────
+	case SigAddressFrozen:
+		idx.handleAddressFrozen(l, blockNum, txHash, logIdx)
+	case SigTokensFrozen:
+		idx.handleTokensFrozen(l, blockNum, txHash, logIdx, true)
+	case SigTokensUnfrozen:
+		idx.handleTokensFrozen(l, blockNum, txHash, logIdx, false)
+	case SigSecurityPaused:
+		idx.handleSecurityPause(l, blockNum, txHash, logIdx, true)
+	case SigSecurityUnpaused:
+		idx.handleSecurityPause(l, blockNum, txHash, logIdx, false)
+	case SigRecoverySuccess:
+		idx.handleRecoverySuccess(l, blockNum, txHash, logIdx)
+	case SigUpdatedTokenInformation:
+		idx.handleSimpleSecuritiesEvent(l, blockNum, txHash, logIdx, "UpdatedTokenInformation")
+	case SigIdentityRegistryAdded:
+		idx.handleSimpleSecuritiesEvent(l, blockNum, txHash, logIdx, "IdentityRegistryAdded")
+	case SigComplianceAdded:
+		idx.handleSimpleSecuritiesEvent(l, blockNum, txHash, logIdx, "ComplianceAdded")
+
+	// ── IdentityRegistry / Storage ────────────────────────────────────
+	case SigIdentityRegistered:
+		idx.handleIdentityRegistryAction(l, blockNum, txHash, logIdx, "IdentityRegistered")
+	case SigIdentityRemoved:
+		idx.handleIdentityRegistryAction(l, blockNum, txHash, logIdx, "IdentityRemoved")
+	case SigIdentityUpdated:
+		idx.handleIdentityRegistryAction(l, blockNum, txHash, logIdx, "IdentityUpdated")
+	case SigCountryUpdated:
+		idx.handleIdentityRegistryAction(l, blockNum, txHash, logIdx, "CountryUpdated")
+	case SigIdentityStored:
+		idx.handleIdentityRegistryAction(l, blockNum, txHash, logIdx, "IdentityStored")
+
+	// ── ONCHAINID (ERC-734 / ERC-735) ─────────────────────────────────
+	case SigClaimAdded:
+		idx.handleClaim(l, blockNum, txHash, logIdx, "ClaimAdded")
+	case SigClaimRemoved:
+		idx.handleClaim(l, blockNum, txHash, logIdx, "ClaimRemoved")
+	case SigClaimChanged:
+		idx.handleClaim(l, blockNum, txHash, logIdx, "ClaimChanged")
+	case SigKeyAdded:
+		idx.handleKey(l, blockNum, txHash, logIdx, "KeyAdded")
+	case SigKeyRemoved:
+		idx.handleKey(l, blockNum, txHash, logIdx, "KeyRemoved")
+	case SigOnchainIdApproved:
+		idx.handleSimpleSecuritiesEvent(l, blockNum, txHash, logIdx, "OnchainIdApproved")
+	case SigOnchainIdExecuted:
+		idx.handleSimpleSecuritiesEvent(l, blockNum, txHash, logIdx, "OnchainIdExecuted")
+
+	// ── TrustedIssuersRegistry / ClaimTopicsRegistry ──────────────────
+	case SigTrustedIssuerAdded:
+		idx.handleTrustedIssuer(l, blockNum, txHash, logIdx, "TrustedIssuerAdded")
+	case SigTrustedIssuerRemoved:
+		idx.handleTrustedIssuer(l, blockNum, txHash, logIdx, "TrustedIssuerRemoved")
+	case SigClaimTopicsUpdated:
+		idx.handleTrustedIssuer(l, blockNum, txHash, logIdx, "ClaimTopicsUpdated")
+	case SigClaimTopicAdded:
+		idx.handleClaimTopic(l, blockNum, txHash, logIdx, "ClaimTopicAdded")
+	case SigClaimTopicRemoved:
+		idx.handleClaimTopic(l, blockNum, txHash, logIdx, "ClaimTopicRemoved")
+
+	// ── ModularCompliance / IModule ───────────────────────────────────
+	case SigModuleAdded, SigModuleRemoved, SigTokenBound, SigTokenUnbound, SigModuleInteraction:
+		idx.handleComplianceEvent(l, blockNum, txHash, logIdx, topic0)
 	}
 }
 
