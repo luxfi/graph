@@ -156,6 +156,27 @@ func main() {
 
 	mux.HandleFunc("GET "+prefix+"/graphql", eng.HandleGraphiQL)
 
+	// /ql — canonical short alias for /graphql. Same payload shape, less typing.
+	// Liquidity convention: /v1/graph/ql.
+	mux.HandleFunc("POST "+prefix+"/ql", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+		m.queryCount.Add(1)
+		m.blockHeight.Store(int64(idx.Status().LatestBlock))
+		var req engine.Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			m.queryErrors.Add(1)
+			http.Error(w, `{"errors":[{"message":"invalid JSON"}]}`, http.StatusBadRequest)
+			return
+		}
+		resp := eng.Execute(r.Context(), &req)
+		if len(resp.Errors) > 0 {
+			m.queryErrors.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+	mux.HandleFunc("GET "+prefix+"/ql", eng.HandleGraphiQL)
+
 	mux.HandleFunc("GET "+prefix+"/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		status := idx.Status()
