@@ -15,7 +15,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go mod download
+      - name: Refresh go.sum (proxy cache inconsistency)
+        run: rm -f go.sum && GOSUMDB=off go mod download
+        env:
+          GOSUMDB: "off"
       - run: go test ./... && go build ./...
         env:
           CGO_ENABLED: 1
