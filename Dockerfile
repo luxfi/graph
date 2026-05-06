@@ -2,13 +2,13 @@ FROM golang:1.26-alpine AS build
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 WORKDIR /src
 COPY . .
-# proxy.golang.org has inconsistent caching for hanzoai/replicate@v0.6.0
-# (different POPs serve different zip hashes). Regenerate go.sum from the
-# proxy state we actually see at build time and skip sum.golang.org.
-RUN rm -f go.sum && GOSUMDB=off go mod download
 ARG VERSION=dev
-RUN CGO_ENABLED=1 CGO_CFLAGS="-D_LARGEFILE64_SOURCE" GOOS=linux \
-    GOSUMDB=off go build \
+# proxy.golang.org caches inconsistently for hanzoai/replicate@v0.6.0
+# (different POPs serve different zip hashes). -mod=mod populates go.sum
+# from whatever the proxy serves at build time and GOSUMDB=off skips
+# sum.golang.org cross-checks.
+RUN rm -f go.sum && CGO_ENABLED=1 CGO_CFLAGS="-D_LARGEFILE64_SOURCE" GOOS=linux \
+    GOSUMDB=off go build -mod=mod \
     -ldflags "-s -w -X main.version=${VERSION}" \
     -o /graphd ./cmd/graphd
 
