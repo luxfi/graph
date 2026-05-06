@@ -1,4 +1,4 @@
-// graph -- standalone GraphQL query layer for any EVM chain.
+// graphd — standalone GraphQL daemon for any EVM chain.
 //
 // Connects to an RPC endpoint, indexes events into local SQLite/ZapDB,
 // serves a GraphQL API compatible with The Graph subgraph queries.
@@ -6,12 +6,12 @@
 //
 // Standalone:
 //
-//	graph --rpc=http://node:8545                          # any EVM
-//	graph --rpc=http://node:9650/ext/bc/{chainID}/rpc     # any Lux subnet
-//	graph --config=subgraphs.yaml                         # multi-subgraph
-//	graph --rpc=http://node:8545 --schema=uniswap-v2      # specific schema
+//	graphd --rpc=http://node:8545                          # any EVM
+//	graphd --rpc=http://node:9650/ext/bc/{chainID}/rpc     # any Lux subnet
+//	graphd --config=subgraphs.yaml                         # multi-subgraph
+//	graphd --rpc=http://node:8545 --schema=uniswap-v2      # specific schema
 //
-// Scale horizontally: run N graph nodes behind a load balancer.
+// Scale horizontally: run N graphd nodes behind a load balancer.
 // Each indexes independently into its own local storage.
 package main
 
