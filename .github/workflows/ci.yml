@@ -10,8 +10,10 @@ jobs:
     runs-on: lux-build-linux-amd64
     steps:
       - uses: actions/checkout@v4
-      - name: Install build deps
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gcc libsqlite3-dev
+      - name: Verify build deps
+        run: |
+          command -v gcc || { echo "gcc not installed on runner"; exit 1; }
+          gcc --version | head -1
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -22,3 +24,4 @@ jobs:
       - run: go test ./... && go build ./...
         env:
           CGO_ENABLED: 1
+          GOSUMDB: "off"
