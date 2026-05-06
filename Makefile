@@ -2,7 +2,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
 
 build:
-	go build $(LDFLAGS) -o bin/graph ./cmd/graph
+	go build $(LDFLAGS) -o bin/graphd ./cmd/graphd
 
 test:
 	go test -v ./...
