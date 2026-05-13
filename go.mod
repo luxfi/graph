@@ -1,6 +1,6 @@
 module github.com/luxfi/graph
 
-go 1.26.1
+go 1.26.3
 
 require (
 	github.com/hanzoai/replicate v0.6.0
