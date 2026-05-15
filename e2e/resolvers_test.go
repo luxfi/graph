@@ -625,31 +625,31 @@ func TestResolver_Privacy_Commitments(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Quantum resolvers (Q-Chain) — ringtail sigs, quantum proofs, PQ keys
+// 8. Quantum resolvers (Q-Chain) — corona sigs, quantum proofs, PQ keys
 // ---------------------------------------------------------------------------
 
-func TestResolver_Quantum_RingtailSignatures(t *testing.T) {
+func TestResolver_Quantum_CoronaSignatures(t *testing.T) {
 	eng, store := newTestEngine(t)
-	store.SetEntity("RingtailSignature", "rs-1", map[string]interface{}{
+	store.SetEntity("CoronaSignature", "rs-1", map[string]interface{}{
 		"id": "rs-1", "algorithm": "ML-DSA-65", "keyID": "key-1", "verified": true,
 	})
 
-	data := execOK(t, eng, `{ ringtailSignatures(first: 10) { id algorithm verified } }`)
-	list := requireList(t, data, "ringtailSignatures", 1)
+	data := execOK(t, eng, `{ coronaSignatures(first: 10) { id algorithm verified } }`)
+	list := requireList(t, data, "coronaSignatures", 1)
 	rs := list[0].(map[string]interface{})
 	if rs["algorithm"] != "ML-DSA-65" {
 		t.Errorf("algorithm: got %v", rs["algorithm"])
 	}
 }
 
-func TestResolver_Quantum_RingtailSignatureSingle(t *testing.T) {
+func TestResolver_Quantum_CoronaSignatureSingle(t *testing.T) {
 	eng, store := newTestEngine(t)
-	store.SetEntity("RingtailSignature", "rs-1", map[string]interface{}{
+	store.SetEntity("CoronaSignature", "rs-1", map[string]interface{}{
 		"id": "rs-1", "algorithm": "ML-DSA-65",
 	})
 
-	data := execOK(t, eng, `{ ringtailSignature(id: "rs-1") { id algorithm } }`)
-	rs := requireMap(t, data, "ringtailSignature")
+	data := execOK(t, eng, `{ coronaSignature(id: "rs-1") { id algorithm } }`)
+	rs := requireMap(t, data, "coronaSignature")
 	if rs["algorithm"] != "ML-DSA-65" {
 		t.Errorf("algorithm: got %v", rs["algorithm"])
 	}
@@ -1243,7 +1243,7 @@ func TestResolver_ErrorMissingID(t *testing.T) {
 		{"validator", `{ validator { id } }`},
 		{"asset", `{ asset { id } }`},
 		{"shieldedTransfer", `{ shieldedTransfer { id } }`},
-		{"ringtailSignature", `{ ringtailSignature { id } }`},
+		{"coronaSignature", `{ coronaSignature { id } }`},
 		{"managedKey", `{ managedKey { id } }`},
 		{"inferenceProof", `{ inferenceProof { id } }`},
 		{"did", `{ did { id } }`},
@@ -1288,7 +1288,7 @@ func TestResolver_EmptyStore_AllChains(t *testing.T) {
 		{"bridgeTransfers", `{ bridgeTransfers(first: 10) { id } }`, "bridgeTransfers"},
 		{"dkgCeremonies", `{ dkgCeremonies(first: 10) { id } }`, "dkgCeremonies"},
 		{"shieldedTransfers", `{ shieldedTransfers(first: 10) { id } }`, "shieldedTransfers"},
-		{"ringtailSignatures", `{ ringtailSignatures(first: 10) { id } }`, "ringtailSignatures"},
+		{"coronaSignatures", `{ coronaSignatures(first: 10) { id } }`, "coronaSignatures"},
 		{"managedKeys", `{ managedKeys(first: 10) { id } }`, "managedKeys"},
 		{"inferenceProofs", `{ inferenceProofs(first: 10) { id } }`, "inferenceProofs"},
 		{"dids", `{ dids(first: 10) { id } }`, "dids"},

@@ -14,7 +14,7 @@
 //	0x0Axx — Graph (on-chain GraphQL schema registry)
 //	0x92xx — DEX (native orderbook: limit, market, cancel)
 //	0x9003 — Blake3 hash
-//	0xB002 — Ring signatures (Ringtail)
+//	0xB002 — Ring signatures (Corona)
 //
 // Entities: PrecompileCall, AIWorkProof, FHEOperation, ZKVerification,
 //
@@ -116,7 +116,7 @@ var Addresses = map[string]string{
 	"dexLimit":        "0x9200",
 	"dexMarket":       "0x9201",
 	"dexCancel":       "0x9202",
-	"ringtail":        "0xB002",
+	"corona":        "0xB002",
 }
 
 func resolvePrecompileCall(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {

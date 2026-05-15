@@ -2,7 +2,7 @@
 //
 // Indexes: post-quantum signatures, proofs, key pairs, finality, attestations.
 //
-// Entities: RingtailSignature, QuantumProof, PQKeyPair, QuantumFinality, QuantumAttestation
+// Entities: CoronaSignature, QuantumProof, PQKeyPair, QuantumFinality, QuantumAttestation
 package quantum
 
 import (
@@ -15,8 +15,8 @@ import (
 type ResolverFunc = func(context.Context, *storage.Store, map[string]interface{}) (interface{}, error)
 
 func Register(resolvers map[string]ResolverFunc) {
-	resolvers["ringtailSignature"] = resolveRingtailSignature
-	resolvers["ringtailSignatures"] = resolveRingtailSignatures
+	resolvers["coronaSignature"] = resolveCoronaSignature
+	resolvers["coronaSignatures"] = resolveCoronaSignatures
 	resolvers["quantumProof"] = resolveQuantumProof
 	resolvers["quantumProofs"] = resolveQuantumProofs
 	resolvers["pqKeyPair"] = resolvePQKeyPair
@@ -28,12 +28,12 @@ func Register(resolvers map[string]ResolverFunc) {
 	resolvers["quantumStats"] = resolveQuantumStats
 }
 
-func resolveRingtailSignature(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("RingtailSignature", fmt.Sprint(id)) }
-	return nil, fmt.Errorf("ringtailSignature requires id")
+func resolveCoronaSignature(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
+	if id, ok := args["id"]; ok { return s.GetByType("CoronaSignature", fmt.Sprint(id)) }
+	return nil, fmt.Errorf("coronaSignature requires id")
 }
-func resolveRingtailSignatures(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	return s.ListByType("RingtailSignature", pl(args))
+func resolveCoronaSignatures(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
+	return s.ListByType("CoronaSignature", pl(args))
 }
 func resolveQuantumProof(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	if id, ok := args["id"]; ok { return s.GetByType("QuantumProof", fmt.Sprint(id)) }
