@@ -126,7 +126,7 @@ func TestSchema_Privacy(t *testing.T) {
 
 func TestSchema_Quantum(t *testing.T) {
 	eng := setupChainEngine(t, "qchain")
-	resp := eng.Execute(nil, &engine.Request{Query: `{ ringtailSignatures(first: 10) { id } }`})
+	resp := eng.Execute(nil, &engine.Request{Query: `{ coronaSignatures(first: 10) { id } }`})
 	if len(resp.Errors) > 0 { t.Fatal(resp.Errors[0].Message) }
 }
 
@@ -197,7 +197,7 @@ func TestSchema_All(t *testing.T) {
 		`{ assets(first: 1) { id } }`,              // Exchange (X-Chain)
 		`{ bridgeTransfers(first: 1) { id } }`,     // Bridge (B-Chain)
 		`{ shieldedTransfers(first: 1) { id } }`,   // Privacy (Z-Chain)
-		`{ ringtailSignatures(first: 1) { id } }`,  // Quantum (Q-Chain)
+		`{ coronaSignatures(first: 1) { id } }`,  // Quantum (Q-Chain)
 		`{ managedKeys(first: 1) { id } }`,         // Key (K-Chain)
 		`{ inferenceProofs(first: 1) { id } }`,     // AI (A-Chain)
 		`{ dids(first: 1) { id } }`,                // Identity (I-Chain)
