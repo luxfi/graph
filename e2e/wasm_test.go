@@ -18,7 +18,7 @@ func TestWASM_LoadV2Subgraph(t *testing.T) {
 	}
 	defer rt.Close()
 
-	sg, err := rt.LoadSubgraph("/Users/z/work/lux/uni-v2-subgraph/build/")
+	sg, err := rt.LoadSubgraph(os.ExpandEnv("$HOME/work/lux/uni-v2-subgraph/build/"))
 	if err != nil {
 		t.Fatalf("load v2 subgraph: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestWASM_LoadV3Subgraph(t *testing.T) {
 	}
 	defer rt.Close()
 
-	sg, err := rt.LoadSubgraph("/Users/z/work/lux/uni-v3-subgraph/build/")
+	sg, err := rt.LoadSubgraph(os.ExpandEnv("$HOME/work/lux/uni-v3-subgraph/build/"))
 	if err != nil {
 		t.Fatalf("load v3 subgraph: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestWASM_LoadV4Subgraph(t *testing.T) {
 	}
 	defer rt.Close()
 
-	sg, err := rt.LoadSubgraph("/Users/z/work/lux/uni-v4-subgraph/build/")
+	sg, err := rt.LoadSubgraph(os.ExpandEnv("$HOME/work/lux/uni-v4-subgraph/build/"))
 	if err != nil {
 		t.Fatalf("load v4 subgraph: %v", err)
 	}
