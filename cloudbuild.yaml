@@ -3,14 +3,16 @@ steps:
     args:
       - 'build'
       - '-t'
-      - 'us-docker.pkg.dev/liquidity-registry/liquidityio/graph:${_TAG}'
+      - '${_REGISTRY}/${_NAMESPACE}/graph:${_TAG}'
       - '-t'
-      - 'us-docker.pkg.dev/liquidity-registry/liquidityio/graph:${_VERSION}'
+      - '${_REGISTRY}/${_NAMESPACE}/graph:${_VERSION}'
       - '.'
 images:
-  - 'us-docker.pkg.dev/liquidity-registry/liquidityio/graph:${_TAG}'
-  - 'us-docker.pkg.dev/liquidity-registry/liquidityio/graph:${_VERSION}'
+  - '${_REGISTRY}/${_NAMESPACE}/graph:${_TAG}'
+  - '${_REGISTRY}/${_NAMESPACE}/graph:${_VERSION}'
 substitutions:
+  _REGISTRY: ghcr.io
+  _NAMESPACE: luxfi
   _TAG: dev
   _VERSION: latest
 options:
