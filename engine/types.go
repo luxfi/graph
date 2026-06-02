@@ -8,13 +8,13 @@ package engine
 type Factory struct {
 	ID                  string `json:"id"`
 	PoolCount           int64  `json:"poolCount"`
-	PairCount           int64  `json:"pairCount"`           // v2
+	PairCount           int64  `json:"pairCount"` // v2
 	TxCount             int64  `json:"txCount"`
 	TotalVolumeUSD      string `json:"totalVolumeUSD"`
 	TotalVolumeETH      string `json:"totalVolumeETH"`
 	TotalFeesUSD        string `json:"totalFeesUSD"`
 	TotalValueLockedUSD string `json:"totalValueLockedUSD"`
-	TotalLiquidityUSD   string `json:"totalLiquidityUSD"`   // v2 compat
+	TotalLiquidityUSD   string `json:"totalLiquidityUSD"` // v2 compat
 	TotalValueLockedETH string `json:"totalValueLockedETH"`
 }
 
@@ -22,7 +22,7 @@ type Factory struct {
 type Bundle struct {
 	ID          string `json:"id"`
 	EthPriceUSD string `json:"ethPriceUSD"`
-	EthPrice    string `json:"ethPrice"`    // v2 compat
+	EthPrice    string `json:"ethPrice"` // v2 compat
 	LuxPriceUSD string `json:"luxPriceUSD"`
 }
 
@@ -41,10 +41,10 @@ type Token struct {
 	PoolCount           int64  `json:"poolCount"`
 	TotalValueLocked    string `json:"totalValueLocked"`
 	TotalValueLockedUSD string `json:"totalValueLockedUSD"`
-	TotalLiquidity      string `json:"totalLiquidity"`      // v2
+	TotalLiquidity      string `json:"totalLiquidity"` // v2
 	DerivedETH          string `json:"derivedETH"`
-	TradeVolume         string `json:"tradeVolume"`         // v2
-	TradeVolumeUSD      string `json:"tradeVolumeUSD"`      // v2
+	TradeVolume         string `json:"tradeVolume"`    // v2
+	TradeVolumeUSD      string `json:"tradeVolumeUSD"` // v2
 }
 
 // Pool — V3 concentrated liquidity pool
@@ -98,7 +98,7 @@ type Swap struct {
 	Transaction string `json:"transaction"`
 	Timestamp   int64  `json:"timestamp"`
 	Pool        string `json:"pool"`
-	Pair        string `json:"pair"`      // v2
+	Pair        string `json:"pair"` // v2
 	Token0      string `json:"token0"`
 	Token1      string `json:"token1"`
 	Sender      string `json:"sender"`
@@ -190,12 +190,12 @@ type PoolDayData struct {
 }
 
 type PairDayData struct {
-	ID        string `json:"id"`
-	Date      int64  `json:"date"`
-	Pair      *Pair  `json:"pair"`
-	VolumeUSD string `json:"dailyVolumeUSD"`
+	ID         string `json:"id"`
+	Date       int64  `json:"date"`
+	Pair       *Pair  `json:"pair"`
+	VolumeUSD  string `json:"dailyVolumeUSD"`
 	ReserveUSD string `json:"reserveUSD"`
-	TxCount   int64  `json:"dailyTxns"`
+	TxCount    int64  `json:"dailyTxns"`
 }
 
 type FactoryDayData struct {
