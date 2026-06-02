@@ -25,21 +25,27 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolvePredictionMarket(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("PredictionMarket", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("PredictionMarket", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("predictionMarket requires id")
 }
 func resolvePredictionMarkets(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("PredictionMarket", pl(args))
 }
 func resolvePredictionPosition(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("PredictionPosition", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("PredictionPosition", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("predictionPosition requires id")
 }
 func resolvePredictionPositions(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("PredictionPosition", pl(args))
 }
 func resolvePredictionResolution(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("PredictionResolution", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("PredictionResolution", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("predictionResolution requires id")
 }
 func resolvePredictionResolutions(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -51,6 +57,8 @@ func resolvePredictionStats(_ context.Context, s *storage.Store, _ map[string]in
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

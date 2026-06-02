@@ -29,35 +29,45 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveDID(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("DID", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("DID", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("did requires id")
 }
 func resolveDIDs(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("DID", pl(args))
 }
 func resolveVerifiableCredential(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("VerifiableCredential", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("VerifiableCredential", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("verifiableCredential requires id")
 }
 func resolveVerifiableCredentials(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("VerifiableCredential", pl(args))
 }
 func resolveAttestation(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("Attestation", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("Attestation", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("attestation requires id")
 }
 func resolveAttestations(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("Attestation", pl(args))
 }
 func resolveIdentityRegistry(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("IdentityRegistry", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("IdentityRegistry", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("identityRegistry requires id")
 }
 func resolveIdentityRegistries(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("IdentityRegistry", pl(args))
 }
 func resolveCredentialSchema(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("CredentialSchema", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("CredentialSchema", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("credentialSchema requires id")
 }
 func resolveCredentialSchemas(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -69,6 +79,8 @@ func resolveIdentityStats(_ context.Context, s *storage.Store, _ map[string]inte
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

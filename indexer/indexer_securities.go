@@ -84,11 +84,11 @@ func (idx *Indexer) handleAddressFrozen(l *logEntry, blockNum uint64, txHash, lo
 	// Live snapshot
 	snapID := fmt.Sprintf("%s:%s", l.Address, user)
 	idx.store.SetEntity("FrozenAccount", snapID, map[string]interface{}{
-		"id":       snapID,
-		"token":    l.Address,
-		"user":     user,
-		"frozen":   isFrozen,
-		"updated":  blockNum,
+		"id":      snapID,
+		"token":   l.Address,
+		"user":    user,
+		"frozen":  isFrozen,
+		"updated": blockNum,
 	})
 }
 

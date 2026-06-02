@@ -29,35 +29,45 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveCoronaSignature(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("CoronaSignature", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("CoronaSignature", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("coronaSignature requires id")
 }
 func resolveCoronaSignatures(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("CoronaSignature", pl(args))
 }
 func resolveQuantumProof(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("QuantumProof", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("QuantumProof", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("quantumProof requires id")
 }
 func resolveQuantumProofs(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("QuantumProof", pl(args))
 }
 func resolvePQKeyPair(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("PQKeyPair", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("PQKeyPair", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("pqKeyPair requires id")
 }
 func resolvePQKeyPairs(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("PQKeyPair", pl(args))
 }
 func resolveQuantumFinality(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("QuantumFinality", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("QuantumFinality", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("quantumFinality requires id")
 }
 func resolveQuantumFinalitys(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("QuantumFinality", pl(args))
 }
 func resolveQuantumAttestation(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("QuantumAttestation", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("QuantumAttestation", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("quantumAttestation requires id")
 }
 func resolveQuantumAttestations(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -69,6 +79,8 @@ func resolveQuantumStats(_ context.Context, s *storage.Store, _ map[string]inter
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

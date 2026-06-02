@@ -29,35 +29,45 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolvePriceFeed(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("PriceFeed", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("PriceFeed", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("priceFeed requires id")
 }
 func resolvePriceFeeds(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("PriceFeed", pl(args))
 }
 func resolveDataRequest(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("DataRequest", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("DataRequest", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("dataRequest requires id")
 }
 func resolveDataRequests(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("DataRequest", pl(args))
 }
 func resolveOracleReport(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("OracleReport", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("OracleReport", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("oracleReport requires id")
 }
 func resolveOracleReports(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("OracleReport", pl(args))
 }
 func resolveOracleNode(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("OracleNode", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("OracleNode", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("oracleNode requires id")
 }
 func resolveOracleNodes(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("OracleNode", pl(args))
 }
 func resolveDataAttestation(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("DataAttestation", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("DataAttestation", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("dataAttestation requires id")
 }
 func resolveDataAttestations(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -69,6 +79,8 @@ func resolveOracleStats(_ context.Context, s *storage.Store, _ map[string]interf
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

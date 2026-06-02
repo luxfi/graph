@@ -5,19 +5,19 @@ package engine
 
 // PoolManager — V4 singleton (replaces per-factory pattern)
 type PoolManager struct {
-	ID                             string `json:"id"`
-	PoolCount                      int64  `json:"poolCount"`
-	TxCount                        int64  `json:"txCount"`
-	TotalVolumeUSD                 string `json:"totalVolumeUSD"`
-	TotalVolumeETH                 string `json:"totalVolumeETH"`
-	TotalFeesUSD                   string `json:"totalFeesUSD"`
-	TotalFeesETH                   string `json:"totalFeesETH"`
-	UntrackedVolumeUSD             string `json:"untrackedVolumeUSD"`
-	TotalValueLockedUSD            string `json:"totalValueLockedUSD"`
-	TotalValueLockedETH            string `json:"totalValueLockedETH"`
-	TotalValueLockedUSDUntracked   string `json:"totalValueLockedUSDUntracked"`
-	TotalValueLockedETHUntracked   string `json:"totalValueLockedETHUntracked"`
-	Owner                          string `json:"owner"`
+	ID                           string `json:"id"`
+	PoolCount                    int64  `json:"poolCount"`
+	TxCount                      int64  `json:"txCount"`
+	TotalVolumeUSD               string `json:"totalVolumeUSD"`
+	TotalVolumeETH               string `json:"totalVolumeETH"`
+	TotalFeesUSD                 string `json:"totalFeesUSD"`
+	TotalFeesETH                 string `json:"totalFeesETH"`
+	UntrackedVolumeUSD           string `json:"untrackedVolumeUSD"`
+	TotalValueLockedUSD          string `json:"totalValueLockedUSD"`
+	TotalValueLockedETH          string `json:"totalValueLockedETH"`
+	TotalValueLockedUSDUntracked string `json:"totalValueLockedUSDUntracked"`
+	TotalValueLockedETHUntracked string `json:"totalValueLockedETHUntracked"`
+	Owner                        string `json:"owner"`
 }
 
 // ModifyLiquidity — V4 unified liquidity event (replaces separate Mint/Burn)
@@ -30,7 +30,7 @@ type ModifyLiquidity struct {
 	Token1      string `json:"token1"`
 	Sender      string `json:"sender"`
 	Origin      string `json:"origin"`
-	Amount      string `json:"amount"`      // liquidityDelta (positive=mint, negative=burn)
+	Amount      string `json:"amount"` // liquidityDelta (positive=mint, negative=burn)
 	Amount0     string `json:"amount0"`
 	Amount1     string `json:"amount1"`
 	AmountUSD   string `json:"amountUSD"`
@@ -71,24 +71,24 @@ type Unsubscribe struct {
 // PoolV4 extends Pool with V4-specific fields
 type PoolV4 struct {
 	Pool
-	TickSpacing          int64  `json:"tickSpacing"`
-	Hooks                string `json:"hooks"`
-	IsExternalLiquidity  bool   `json:"isExternalLiquidity"`
-	CollectedFeesToken0  string `json:"collectedFeesToken0"`
-	CollectedFeesToken1  string `json:"collectedFeesToken1"`
-	CollectedFeesUSD     string `json:"collectedFeesUSD"`
-	LiquidityProviderCount int64 `json:"liquidityProviderCount"`
+	TickSpacing            int64  `json:"tickSpacing"`
+	Hooks                  string `json:"hooks"`
+	IsExternalLiquidity    bool   `json:"isExternalLiquidity"`
+	CollectedFeesToken0    string `json:"collectedFeesToken0"`
+	CollectedFeesToken1    string `json:"collectedFeesToken1"`
+	CollectedFeesUSD       string `json:"collectedFeesUSD"`
+	LiquidityProviderCount int64  `json:"liquidityProviderCount"`
 }
 
 // UniswapDayData — V4 daily aggregate (same name as V3 for compat)
 type UniswapDayData struct {
-	ID          string `json:"id"`
-	Date        int64  `json:"date"`
-	VolumeETH   string `json:"volumeETH"`
-	VolumeUSD   string `json:"volumeUSD"`
-	FeesUSD     string `json:"feesUSD"`
-	TxCount     int64  `json:"txCount"`
-	TvlUSD      string `json:"tvlUSD"`
+	ID        string `json:"id"`
+	Date      int64  `json:"date"`
+	VolumeETH string `json:"volumeETH"`
+	VolumeUSD string `json:"volumeUSD"`
+	FeesUSD   string `json:"feesUSD"`
+	TxCount   int64  `json:"txCount"`
+	TvlUSD    string `json:"tvlUSD"`
 }
 
 // PoolHourData — hourly pool snapshot
