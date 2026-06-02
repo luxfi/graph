@@ -51,12 +51,12 @@ type Subgraph struct {
 
 // DataSource maps a contract to its WASM handler module.
 type DataSource struct {
-	Name       string          `yaml:"name"`
-	Kind       string          `yaml:"kind"`
-	Network    string          `yaml:"network"`
-	Source     ContractSource  `yaml:"source"`
-	Mapping    Mapping         `yaml:"mapping"`
-	wasmBytes  []byte
+	Name      string         `yaml:"name"`
+	Kind      string         `yaml:"kind"`
+	Network   string         `yaml:"network"`
+	Source    ContractSource `yaml:"source"`
+	Mapping   Mapping        `yaml:"mapping"`
+	wasmBytes []byte
 }
 
 // ContractSource identifies the contract to watch.
@@ -85,7 +85,7 @@ type ABIRef struct {
 
 // EventHandler maps an EVM event signature to a WASM handler function.
 type EventHandler struct {
-	Event   string `yaml:"event"` // e.g., "Swap(indexed address,uint256,uint256,uint256,uint256,indexed address)"
+	Event   string `yaml:"event"`   // e.g., "Swap(indexed address,uint256,uint256,uint256,uint256,indexed address)"
 	Handler string `yaml:"handler"` // e.g., "handleSwap"
 }
 

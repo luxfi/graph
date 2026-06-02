@@ -172,15 +172,19 @@ func (s *Store) ListByType(entityType string, limit int) (interface{}, error) {
 
 // --- Block queries (stubs) ---
 
-func (s *Store) GetBlock(_ context.Context, id string) (interface{}, error)         { return nil, nil }
+func (s *Store) GetBlock(_ context.Context, id string) (interface{}, error)          { return nil, nil }
 func (s *Store) GetBlockByNumber(_ context.Context, num string) (interface{}, error) { return nil, nil }
 func (s *Store) GetLatestBlock(_ context.Context) (interface{}, error)               { return nil, nil }
-func (s *Store) GetBlocks(_ context.Context, limit int) (interface{}, error)         { return []interface{}{}, nil }
+func (s *Store) GetBlocks(_ context.Context, limit int) (interface{}, error) {
+	return []interface{}{}, nil
+}
 
 // --- Transaction queries (stubs) ---
 
 func (s *Store) GetTransaction(_ context.Context, hash string) (interface{}, error) { return nil, nil }
-func (s *Store) GetTransactions(_ context.Context, limit int) (interface{}, error)  { return []interface{}{}, nil }
+func (s *Store) GetTransactions(_ context.Context, limit int) (interface{}, error) {
+	return []interface{}{}, nil
+}
 
 // --- Token queries ---
 
@@ -493,14 +497,26 @@ func (s *Store) GetNFTs(_ context.Context, limit int, orderBy, orderDirection st
 
 // --- V4 storage methods ---
 
-func (s *Store) GetModifyLiquidity(_ context.Context, id string) (interface{}, error)                                   { return nil, nil }
-func (s *Store) GetModifyLiquiditys(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error) { return []interface{}{}, nil }
-func (s *Store) GetSubscribe(_ context.Context, id string) (interface{}, error)                                         { return nil, nil }
-func (s *Store) GetSubscribes(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error)        { return []interface{}{}, nil }
-func (s *Store) GetUnsubscribe(_ context.Context, id string) (interface{}, error)                                       { return nil, nil }
-func (s *Store) GetUnsubscribes(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error)      { return []interface{}{}, nil }
-func (s *Store) GetPoolHourDatas(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error)     { return []interface{}{}, nil }
-func (s *Store) GetTokenHourDatas(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error)    { return []interface{}{}, nil }
+func (s *Store) GetModifyLiquidity(_ context.Context, id string) (interface{}, error) {
+	return nil, nil
+}
+func (s *Store) GetModifyLiquiditys(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error) {
+	return []interface{}{}, nil
+}
+func (s *Store) GetSubscribe(_ context.Context, id string) (interface{}, error) { return nil, nil }
+func (s *Store) GetSubscribes(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error) {
+	return []interface{}{}, nil
+}
+func (s *Store) GetUnsubscribe(_ context.Context, id string) (interface{}, error) { return nil, nil }
+func (s *Store) GetUnsubscribes(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error) {
+	return []interface{}{}, nil
+}
+func (s *Store) GetPoolHourDatas(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error) {
+	return []interface{}{}, nil
+}
+func (s *Store) GetTokenHourDatas(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error) {
+	return []interface{}{}, nil
+}
 
 // --- Internal helpers ---
 
@@ -542,4 +558,3 @@ func (s *Store) loadPool(id string) (*SeedPoolData, error) {
 	json.Unmarshal([]byte(raw), &p)
 	return &p, nil
 }
-

@@ -29,35 +29,45 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveWarpMessage(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("WarpMessage", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("WarpMessage", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("warpMessage requires id")
 }
 func resolveWarpMessages(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("WarpMessage", pl(args))
 }
 func resolveRelayRequest(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("RelayRequest", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("RelayRequest", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("relayRequest requires id")
 }
 func resolveRelayRequests(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("RelayRequest", pl(args))
 }
 func resolveRelayProof(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("RelayProof", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("RelayProof", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("relayProof requires id")
 }
 func resolveRelayProofs(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("RelayProof", pl(args))
 }
 func resolveRelayRoute(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("RelayRoute", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("RelayRoute", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("relayRoute requires id")
 }
 func resolveRelayRoutes(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("RelayRoute", pl(args))
 }
 func resolveMessageReceipt(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("MessageReceipt", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("MessageReceipt", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("messageReceipt requires id")
 }
 func resolveMessageReceipts(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -69,6 +79,8 @@ func resolveRelayStats(_ context.Context, s *storage.Store, _ map[string]interfa
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

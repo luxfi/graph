@@ -27,28 +27,36 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveBridgeTransfer(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("BridgeTransfer", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("BridgeTransfer", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("bridgeTransfer requires id")
 }
 func resolveBridgeTransfers(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("BridgeTransfer", pl(args))
 }
 func resolveMPCSignature(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("MPCSignature", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("MPCSignature", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("mpcSignature requires id")
 }
 func resolveMPCSignatures(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("MPCSignature", pl(args))
 }
 func resolveWrappedAsset(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("WrappedAsset", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("WrappedAsset", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("wrappedAsset requires id")
 }
 func resolveWrappedAssets(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("WrappedAsset", pl(args))
 }
 func resolveBridgeRequest(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("BridgeRequest", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("BridgeRequest", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("bridgeRequest requires id")
 }
 func resolveBridgeRequests(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -60,6 +68,8 @@ func resolveBridgeStats(_ context.Context, s *storage.Store, _ map[string]interf
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

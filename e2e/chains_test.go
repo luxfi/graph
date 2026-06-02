@@ -127,43 +127,57 @@ func TestSchema_Privacy(t *testing.T) {
 func TestSchema_Quantum(t *testing.T) {
 	eng := setupChainEngine(t, "qchain")
 	resp := eng.Execute(nil, &engine.Request{Query: `{ coronaSignatures(first: 10) { id } }`})
-	if len(resp.Errors) > 0 { t.Fatal(resp.Errors[0].Message) }
+	if len(resp.Errors) > 0 {
+		t.Fatal(resp.Errors[0].Message)
+	}
 }
 
 func TestSchema_Key(t *testing.T) {
 	eng := setupChainEngine(t, "kchain")
 	resp := eng.Execute(nil, &engine.Request{Query: `{ managedKeys(first: 10) { id } }`})
-	if len(resp.Errors) > 0 { t.Fatal(resp.Errors[0].Message) }
+	if len(resp.Errors) > 0 {
+		t.Fatal(resp.Errors[0].Message)
+	}
 }
 
 func TestSchema_AI(t *testing.T) {
 	eng := setupChainEngine(t, "achain")
 	resp := eng.Execute(nil, &engine.Request{Query: `{ inferenceProofs(first: 10) { id } }`})
-	if len(resp.Errors) > 0 { t.Fatal(resp.Errors[0].Message) }
+	if len(resp.Errors) > 0 {
+		t.Fatal(resp.Errors[0].Message)
+	}
 }
 
 func TestSchema_Identity(t *testing.T) {
 	eng := setupChainEngine(t, "ichain")
 	resp := eng.Execute(nil, &engine.Request{Query: `{ dids(first: 10) { id } }`})
-	if len(resp.Errors) > 0 { t.Fatal(resp.Errors[0].Message) }
+	if len(resp.Errors) > 0 {
+		t.Fatal(resp.Errors[0].Message)
+	}
 }
 
 func TestSchema_Oracle(t *testing.T) {
 	eng := setupChainEngine(t, "ochain")
 	resp := eng.Execute(nil, &engine.Request{Query: `{ priceFeeds(first: 10) { id } }`})
-	if len(resp.Errors) > 0 { t.Fatal(resp.Errors[0].Message) }
+	if len(resp.Errors) > 0 {
+		t.Fatal(resp.Errors[0].Message)
+	}
 }
 
 func TestSchema_Relay(t *testing.T) {
 	eng := setupChainEngine(t, "rchain")
 	resp := eng.Execute(nil, &engine.Request{Query: `{ warpMessages(first: 10) { id } }`})
-	if len(resp.Errors) > 0 { t.Fatal(resp.Errors[0].Message) }
+	if len(resp.Errors) > 0 {
+		t.Fatal(resp.Errors[0].Message)
+	}
 }
 
 func TestSchema_ServiceNode(t *testing.T) {
 	eng := setupChainEngine(t, "schain")
 	resp := eng.Execute(nil, &engine.Request{Query: `{ serviceNodes(first: 10) { id } }`})
-	if len(resp.Errors) > 0 { t.Fatal(resp.Errors[0].Message) }
+	if len(resp.Errors) > 0 {
+		t.Fatal(resp.Errors[0].Message)
+	}
 }
 
 func TestSchema_Precompile(t *testing.T) {
@@ -190,25 +204,25 @@ func TestSchema_All(t *testing.T) {
 
 	// Every chain type must resolve without errors
 	queries := []string{
-		`{ factories(first: 1) { id } }`,          // AMM (C-Chain)
-		`{ orders(first: 1) { id } }`,              // DEX (D-Chain)
-		`{ dkgCeremonies(first: 1) { id } }`,      // FHE (T-Chain)
-		`{ validators(first: 1) { id } }`,          // Platform (P-Chain)
-		`{ assets(first: 1) { id } }`,              // Exchange (X-Chain)
-		`{ bridgeTransfers(first: 1) { id } }`,     // Bridge (B-Chain)
-		`{ shieldedTransfers(first: 1) { id } }`,   // Privacy (Z-Chain)
+		`{ factories(first: 1) { id } }`,         // AMM (C-Chain)
+		`{ orders(first: 1) { id } }`,            // DEX (D-Chain)
+		`{ dkgCeremonies(first: 1) { id } }`,     // FHE (T-Chain)
+		`{ validators(first: 1) { id } }`,        // Platform (P-Chain)
+		`{ assets(first: 1) { id } }`,            // Exchange (X-Chain)
+		`{ bridgeTransfers(first: 1) { id } }`,   // Bridge (B-Chain)
+		`{ shieldedTransfers(first: 1) { id } }`, // Privacy (Z-Chain)
 		`{ coronaSignatures(first: 1) { id } }`,  // Quantum (Q-Chain)
-		`{ managedKeys(first: 1) { id } }`,         // Key (K-Chain)
-		`{ inferenceProofs(first: 1) { id } }`,     // AI (A-Chain)
-		`{ dids(first: 1) { id } }`,                // Identity (I-Chain)
-		`{ priceFeeds(first: 1) { id } }`,          // Oracle (O-Chain)
-		`{ warpMessages(first: 1) { id } }`,        // Relay (R-Chain)
-		`{ serviceNodes(first: 1) { id } }`,        // ServiceNode (S-Chain)
-		`{ precompileCalls(first: 1) { id } }`,     // Precompiles
-		`{ fheOperations(first: 1) { id } }`,       // FHE precompile
-		`{ zkVerifications(first: 1) { id } }`,     // ZK precompile
-		`{ tokens(first: 1) { id } }`,              // ERC20
-		`{ nfts(first: 1) { id } }`,                // ERC721
+		`{ managedKeys(first: 1) { id } }`,       // Key (K-Chain)
+		`{ inferenceProofs(first: 1) { id } }`,   // AI (A-Chain)
+		`{ dids(first: 1) { id } }`,              // Identity (I-Chain)
+		`{ priceFeeds(first: 1) { id } }`,        // Oracle (O-Chain)
+		`{ warpMessages(first: 1) { id } }`,      // Relay (R-Chain)
+		`{ serviceNodes(first: 1) { id } }`,      // ServiceNode (S-Chain)
+		`{ precompileCalls(first: 1) { id } }`,   // Precompiles
+		`{ fheOperations(first: 1) { id } }`,     // FHE precompile
+		`{ zkVerifications(first: 1) { id } }`,   // ZK precompile
+		`{ tokens(first: 1) { id } }`,            // ERC20
+		`{ nfts(first: 1) { id } }`,              // ERC721
 	}
 
 	for _, q := range queries {
