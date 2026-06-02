@@ -176,12 +176,12 @@ const (
 
 // Known factory addresses per network.
 type NetworkConfig struct {
-	Name           string `json:"name" yaml:"name"`
-	ChainID        int64  `json:"chainId" yaml:"chain_id"`
-	FactoryV2      string `json:"factoryV2" yaml:"factory_v2"`
-	FactoryV3      string `json:"factoryV3" yaml:"factory_v3"`
-	WETH           string `json:"weth" yaml:"weth"`             // wrapped native token
-	StableTokens   []string `json:"stableTokens" yaml:"stable_tokens"`
+	Name         string   `json:"name" yaml:"name"`
+	ChainID      int64    `json:"chainId" yaml:"chain_id"`
+	FactoryV2    string   `json:"factoryV2" yaml:"factory_v2"`
+	FactoryV3    string   `json:"factoryV3" yaml:"factory_v3"`
+	WETH         string   `json:"weth" yaml:"weth"` // wrapped native token
+	StableTokens []string `json:"stableTokens" yaml:"stable_tokens"`
 }
 
 // Lux network configs — same addresses as exchange subgraphs.

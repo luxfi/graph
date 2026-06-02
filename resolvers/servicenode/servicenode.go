@@ -29,35 +29,45 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveServiceNode(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("ServiceNode", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("ServiceNode", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("serviceNode requires id")
 }
 func resolveServiceNodes(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("ServiceNode", pl(args))
 }
 func resolveServiceRegistration(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("ServiceRegistration", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("ServiceRegistration", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("serviceRegistration requires id")
 }
 func resolveServiceRegistrations(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("ServiceRegistration", pl(args))
 }
 func resolveSLARecord(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("SLARecord", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("SLARecord", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("slaRecord requires id")
 }
 func resolveSLARecords(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("SLARecord", pl(args))
 }
 func resolveUptimeProof(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("UptimeProof", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("UptimeProof", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("uptimeProof requires id")
 }
 func resolveUptimeProofs(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("UptimeProof", pl(args))
 }
 func resolveServiceEndpoint(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("ServiceEndpoint", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("ServiceEndpoint", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("serviceEndpoint requires id")
 }
 func resolveServiceEndpoints(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -69,6 +79,8 @@ func resolveServiceStats(_ context.Context, s *storage.Store, _ map[string]inter
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

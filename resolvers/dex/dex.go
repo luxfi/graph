@@ -34,49 +34,63 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveOrder(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("Order", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("Order", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("order requires id")
 }
 func resolveOrders(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("Order", parseLimit(args))
 }
 func resolveFill(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("Fill", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("Fill", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("fill requires id")
 }
 func resolveFills(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("Fill", parseLimit(args))
 }
 func resolveMarket(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("Market", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("Market", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("market requires id")
 }
 func resolveMarkets(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("Market", parseLimit(args))
 }
 func resolvePerpPosition(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("PerpPosition", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("PerpPosition", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("perpPosition requires id")
 }
 func resolvePerpPositions(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("PerpPosition", parseLimit(args))
 }
 func resolveFundingRate(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("FundingRate", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("FundingRate", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("fundingRate requires id")
 }
 func resolveFundingRates(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("FundingRate", parseLimit(args))
 }
 func resolveLiquidation(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("Liquidation", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("Liquidation", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("liquidation requires id")
 }
 func resolveLiquidations(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("Liquidation", parseLimit(args))
 }
 func resolveOrderbook(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("Orderbook", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("Orderbook", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("orderbook requires market id")
 }
 func resolveMarketDayDatas(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -85,6 +99,8 @@ func resolveMarketDayDatas(_ context.Context, s *storage.Store, args map[string]
 
 func parseLimit(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return limit
 }

@@ -25,21 +25,27 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveDAOProposal(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("DAOProposal", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("DAOProposal", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("daoProposal requires id")
 }
 func resolveDAOProposals(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("DAOProposal", pl(args))
 }
 func resolveDAOMember(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("DAOMember", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("DAOMember", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("daoMember requires id")
 }
 func resolveDAOMembers(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("DAOMember", pl(args))
 }
 func resolveDAOTreasury(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("DAOTreasury", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("DAOTreasury", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("daoTreasury requires id")
 }
 func resolveDAOTreasuries(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -51,6 +57,8 @@ func resolveDAOStats(_ context.Context, s *storage.Store, _ map[string]interface
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

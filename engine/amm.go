@@ -22,18 +22,18 @@ func (e *Engine) registerAMMResolvers() {
 	e.resolvers["bundles"] = e.resolveBundles
 	e.resolvers["pool"] = e.resolvePool
 	e.resolvers["pools"] = e.resolvePools
-	e.resolvers["pair"] = e.resolvePair       // v2
-	e.resolvers["pairs"] = e.resolvePairs     // v2
+	e.resolvers["pair"] = e.resolvePair   // v2
+	e.resolvers["pairs"] = e.resolvePairs // v2
 	e.resolvers["swap"] = e.resolveSwap
 	e.resolvers["swaps"] = e.resolveSwaps
 	e.resolvers["mint"] = e.resolveMint
 	e.resolvers["mints"] = e.resolveMints
 	e.resolvers["burn"] = e.resolveBurn
 	e.resolvers["burns"] = e.resolveBurns
-	e.resolvers["tick"] = e.resolveTick       // v3
-	e.resolvers["ticks"] = e.resolveTicks     // v3
-	e.resolvers["position"] = e.resolvePosition     // v3
-	e.resolvers["positions"] = e.resolvePositions   // v3
+	e.resolvers["tick"] = e.resolveTick           // v3
+	e.resolvers["ticks"] = e.resolveTicks         // v3
+	e.resolvers["position"] = e.resolvePosition   // v3
+	e.resolvers["positions"] = e.resolvePositions // v3
 
 	// Collect / Flash (V3)
 	e.resolvers["collect"] = e.resolveCollect

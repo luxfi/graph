@@ -25,21 +25,27 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveDIDDocument(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("DIDDocument", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("DIDDocument", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("didDocument requires id")
 }
 func resolveDIDDocuments(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("DIDDocument", pl(args))
 }
 func resolveDIDDelegate(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("DIDDelegate", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("DIDDelegate", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("didDelegate requires id")
 }
 func resolveDIDDelegates(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("DIDDelegate", pl(args))
 }
 func resolveDIDAttribute(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("DIDAttribute", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("DIDAttribute", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("didAttribute requires id")
 }
 func resolveDIDAttributes(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -51,6 +57,8 @@ func resolveDIDStats(_ context.Context, s *storage.Store, _ map[string]interface
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

@@ -25,21 +25,27 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveProposal(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("Proposal", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("Proposal", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("proposal requires id")
 }
 func resolveProposals(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("Proposal", pl(args))
 }
 func resolveVote(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("Vote", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("Vote", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("vote requires id")
 }
 func resolveVotes(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("Vote", pl(args))
 }
 func resolveDelegation(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("Delegation", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("Delegation", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("delegation requires id")
 }
 func resolveDelegations(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -51,6 +57,8 @@ func resolveGovernanceStats(_ context.Context, s *storage.Store, _ map[string]in
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

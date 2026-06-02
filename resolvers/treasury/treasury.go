@@ -27,28 +27,36 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveTreasuryDeposit(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("TreasuryDeposit", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("TreasuryDeposit", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("treasuryDeposit requires id")
 }
 func resolveTreasuryDeposits(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("TreasuryDeposit", pl(args))
 }
 func resolveTreasuryWithdrawal(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("TreasuryWithdrawal", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("TreasuryWithdrawal", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("treasuryWithdrawal requires id")
 }
 func resolveTreasuryWithdrawals(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("TreasuryWithdrawal", pl(args))
 }
 func resolveTreasuryAllocation(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("TreasuryAllocation", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("TreasuryAllocation", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("treasuryAllocation requires id")
 }
 func resolveTreasuryAllocations(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("TreasuryAllocation", pl(args))
 }
 func resolveTreasuryBudget(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("TreasuryBudget", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("TreasuryBudget", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("treasuryBudget requires id")
 }
 func resolveTreasuryBudgets(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -60,6 +68,8 @@ func resolveTreasuryStats(_ context.Context, s *storage.Store, _ map[string]inte
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }

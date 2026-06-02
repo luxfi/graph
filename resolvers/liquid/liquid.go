@@ -27,28 +27,36 @@ func Register(resolvers map[string]ResolverFunc) {
 }
 
 func resolveLiquidStake(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("LiquidStake", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("LiquidStake", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("liquidStake requires id")
 }
 func resolveLiquidStakes(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("LiquidStake", pl(args))
 }
 func resolveLiquidUnstake(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("LiquidUnstake", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("LiquidUnstake", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("liquidUnstake requires id")
 }
 func resolveLiquidUnstakes(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("LiquidUnstake", pl(args))
 }
 func resolveLiquidReward(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("LiquidReward", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("LiquidReward", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("liquidReward requires id")
 }
 func resolveLiquidRewards(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
 	return s.ListByType("LiquidReward", pl(args))
 }
 func resolveLiquidValidator(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
-	if id, ok := args["id"]; ok { return s.GetByType("LiquidValidator", fmt.Sprint(id)) }
+	if id, ok := args["id"]; ok {
+		return s.GetByType("LiquidValidator", fmt.Sprint(id))
+	}
 	return nil, fmt.Errorf("liquidValidator requires id")
 }
 func resolveLiquidValidators(_ context.Context, s *storage.Store, args map[string]interface{}) (interface{}, error) {
@@ -60,6 +68,8 @@ func resolveLiquidStats(_ context.Context, s *storage.Store, _ map[string]interf
 
 func pl(args map[string]interface{}) int {
 	limit := 100
-	if l, ok := args["first"]; ok { fmt.Sscanf(fmt.Sprint(l), "%d", &limit) }
+	if l, ok := args["first"]; ok {
+		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
+	}
 	return min(limit, 1000)
 }
