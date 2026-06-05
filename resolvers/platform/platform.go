@@ -1,8 +1,10 @@
 // Package platform provides resolvers for the P-Chain (PlatformVM).
 //
-// Indexes: validators, delegators, staking, subnets, L1 creation, rewards.
+// Indexes: validators, delegators, staking, chains, L1 creation, rewards.
 //
-// Entities: Validator, Delegator, Subnet, Blockchain, StakingReward, StakingPeriod
+// Entities: Validator, Delegator, Subnet, Blockchain, StakingReward, StakingPeriod.
+// (Subnet / subnets resolver names remain on the GraphQL API surface for
+// backwards compatibility with shipped clients; was upstream Lux v0.x term.)
 package platform
 
 import (
