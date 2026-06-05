@@ -7,7 +7,7 @@
 // Standalone:
 //
 //	graphd --rpc=http://node:8545                          # any EVM
-//	graphd --rpc=http://node:9650/ext/bc/{chainID}/rpc     # any Lux subnet
+//	graphd --rpc=http://node:9650/ext/bc/{chainID}/rpc     # any Lux chain
 //	graphd --config=subgraphs.yaml                         # multi-subgraph
 //	graphd --rpc=http://node:8545 --schema=uniswap-v2      # specific schema
 //
