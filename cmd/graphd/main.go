@@ -157,7 +157,7 @@ func main() {
 	mux.HandleFunc("GET "+prefix+"/graphql", eng.HandleGraphiQL)
 
 	// /ql — canonical short alias for /graphql. Same payload shape, less typing.
-	// Liquidity convention: /v1/graph/ql.
+	// Short-alias convention: /v1/graph/ql.
 	mux.HandleFunc("POST "+prefix+"/ql", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 		m.queryCount.Add(1)
