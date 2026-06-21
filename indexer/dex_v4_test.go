@@ -137,8 +137,25 @@ func TestHandleDEXFill_ScopedToPoolManager(t *testing.T) {
 	}
 }
 
+// initV4Log builds an Initialize log in the EXACT shape the 0x9999 precompile's
+// emitInitializeEvent emits (verified by the producer test
+// TestInitializeEvent_EmittedAt9999WithPairAndFee): topics [sig, poolId, currency0,
+// currency1]; data = fee(uint24) | tickSpacing(int24) | hooks(address) |
+// sqrtPriceX96(uint160) | tick(int24). NOT a fabricated layout — this mirrors the
+// real producer so the consumer test exercises the genuine wire format.
+func initV4Log(poolID, cur0, cur1 string, fee, tickSpacing, sqrtPriceX96, tick int64, blockHex string) *logEntry {
+	return &logEntry{
+		Address: LXSettleAddress,
+		Topics:  []string{SigInitializeV4, poolID, addrTopic(cur0), addrTopic(cur1)},
+		Data: "0x" + word(big.NewInt(fee)) + word(big.NewInt(tickSpacing)) +
+			word(new(big.Int)) /*hooks=0*/ + word(big.NewInt(sqrtPriceX96)) + word(big.NewInt(tick)),
+		BlockNumber: blockHex,
+	}
+}
+
 // Initialize at 0x9999 creates an AMM pool, bumps the factory aggregate, and
-// creates a DEX Market.
+// creates a RICH DEX Market carrying the token pair + fee tier (FIX B(a)) — the
+// fields the native producer (emitInitializeEvent at 0x9999) now supplies.
 func TestHandleInitializeV4_PoolMarketFactory(t *testing.T) {
 	s := newMemSQLiteStore(t)
 	idx := NewWithConfig(Config{RPC: "http://unused"}, s)
@@ -146,13 +163,7 @@ func TestHandleInitializeV4_PoolMarketFactory(t *testing.T) {
 	poolID := topic32("d00d")
 	cur0 := "0x0000000000000000000000000000000000000011"
 	cur1 := "0x0000000000000000000000000000000000000022"
-	l := &logEntry{
-		Address:     LXSettleAddress,
-		Topics:      []string{SigInitializeV4, poolID, addrTopic(cur0), addrTopic(cur1)},
-		Data:        "0x" + word(big.NewInt(3000)) + word(big.NewInt(60)) + word(big.NewInt(0)) + word(big.NewInt(0)) + word(big.NewInt(0)),
-		BlockNumber: "0x1",
-	}
-	idx.processLog(l)
+	idx.processLog(initV4Log(poolID, cur0, cur1, 3000, 60, 0, 0, "0x1"))
 
 	if p, _ := s.GetPool(nil, poolID); p == nil {
 		t.Fatal("expected pool from InitializeV4")
@@ -161,13 +172,86 @@ func TestHandleInitializeV4_PoolMarketFactory(t *testing.T) {
 	if f == nil || asInt64(f.(map[string]interface{})["poolCount"]) != 1 {
 		t.Fatalf("expected factory poolCount=1, got %v", f)
 	}
-	if mk, _ := s.GetByType("Market", poolID); mk == nil {
+	mk, _ := s.GetByType("Market", poolID)
+	if mk == nil {
 		t.Fatal("expected DEX Market from InitializeV4 at 0x9999")
+	}
+	mm := mk.(map[string]interface{})
+	// The Market is RICH, not a poolID-only stub: token pair + fee tier present.
+	if fmt.Sprint(mm["baseToken"]) != cur0 {
+		t.Errorf("Market baseToken = %v, want %s", mm["baseToken"], cur0)
+	}
+	if fmt.Sprint(mm["quoteToken"]) != cur1 {
+		t.Errorf("Market quoteToken = %v, want %s", mm["quoteToken"], cur1)
+	}
+	if asInt64(mm["feeTier"]) != 3000 {
+		t.Errorf("Market feeTier = %v, want 3000", mm["feeTier"])
+	}
+}
+
+// A Fill that arrives BEFORE its market's Initialize creates a volume stub; the
+// later Initialize must MERGE — adding the rich token pair + fee tier WITHOUT
+// resetting the accumulated volume/tradeCount to zero (LOW: stub-vs-rich merge).
+func TestHandleInitializeV4_MergesStubVolume(t *testing.T) {
+	s := newMemSQLiteStore(t)
+	idx := NewWithConfig(Config{RPC: "http://unused"}, s)
+
+	poolID := topic32("beef")
+	taker := "0x00000000000000000000000000000000000000aa"
+	// 1) A DEXFill lands first → writeFill creates a Market stub with volume=400.
+	idx.processLog(&logEntry{
+		Address: LXSettleAddress, Topics: []string{SigDEXFill, poolID, addrTopic(taker)},
+		Data: "0x" + word(big.NewInt(400)) + word(big.NewInt(7)), BlockNumber: "0x5", TransactionHash: "0xaa", LogIndex: "0x0",
+	})
+	// 2) Initialize arrives later → must enrich, not wipe.
+	cur0 := "0x0000000000000000000000000000000000000011"
+	cur1 := "0x0000000000000000000000000000000000000022"
+	idx.processLog(initV4Log(poolID, cur0, cur1, 500, 10, 0, 0, "0x6"))
+
+	mk, _ := s.GetByType("Market", poolID)
+	mm := mk.(map[string]interface{})
+	if mm["volume24h"] != "400" {
+		t.Errorf("Initialize must preserve accumulated volume, got %v want 400", mm["volume24h"])
+	}
+	if asInt64(mm["tradeCount"]) != 1 {
+		t.Errorf("Initialize must preserve tradeCount, got %v want 1", mm["tradeCount"])
+	}
+	if fmt.Sprint(mm["baseToken"]) != cur0 || asInt64(mm["feeTier"]) != 500 {
+		t.Errorf("Initialize must add rich fields: baseToken=%v feeTier=%v", mm["baseToken"], mm["feeTier"])
+	}
+}
+
+// bumpFactory must PRESERVE the USD aggregates across its read-modify-write — the
+// landing-page header's TVL/volume. SeedFactory is INSERT OR REPLACE, so writing
+// them empty on every pool-create/swap would clobber them (MEDIUM).
+func TestBumpFactory_PreservesTVLAndVolume(t *testing.T) {
+	s := newMemSQLiteStore(t)
+	idx := NewWithConfig(Config{RPC: "http://unused"}, s)
+
+	// Seed the factory with USD aggregates (as the price-oracle path would).
+	s.SeedFactory("1", &storage.SeedFactoryData{
+		PoolCount: 2, TxCount: 5, TotalValueLockedUSD: "1000000", TotalVolumeUSD: "5000000",
+	})
+
+	// A pool-create bumps counts — must not zero the USD aggregates.
+	idx.bumpFactory(1)
+
+	f, _ := s.GetFactory(nil, "1")
+	fm := f.(map[string]interface{})
+	if asInt64(fm["poolCount"]) != 3 {
+		t.Errorf("poolCount = %v, want 3", fm["poolCount"])
+	}
+	if fmt.Sprint(fm["totalValueLockedUSD"]) != "1000000" {
+		t.Errorf("totalValueLockedUSD clobbered: got %v want 1000000", fm["totalValueLockedUSD"])
+	}
+	if fmt.Sprint(fm["totalVolumeUSD"]) != "5000000" {
+		t.Errorf("totalVolumeUSD clobbered: got %v want 5000000", fm["totalVolumeUSD"])
 	}
 }
 
 // The re-genesis self-heal: a persisted cursor far above a freshly-relaunched
-// chain's head must rewind to StartBlock so the new chain indexes from genesis.
+// chain's head must rewind to StartBlock so the new chain indexes from genesis —
+// but only after the low head is CONFIRMED across regenesisConfirmations polls.
 func TestPoll_RegenesisSelfHeal(t *testing.T) {
 	s := newMemSQLiteStore(t)
 	s.SetLastBlock(5_000_000) // stale cursor from the previous chain
@@ -176,10 +260,17 @@ func TestPoll_RegenesisSelfHeal(t *testing.T) {
 		t.Fatalf("precondition: lastBlock=%d", idx.lastBlock)
 	}
 
-	// Simulate the head as observed on a fresh chain (head=3, far below cursor).
-	idx.maybeResetForRegenesis(3)
+	// A fresh chain reports head=3, far below cursor — sustained across the
+	// confirmation window. Only the FINAL confirming poll rewinds.
+	for i := 0; i < regenesisConfirmations-1; i++ {
+		idx.maybeResetForRegenesis(3)
+		if idx.lastBlock != 5_000_000 {
+			t.Fatalf("must not rewind before %d confirmations (poll %d), lastBlock=%d", regenesisConfirmations, i+1, idx.lastBlock)
+		}
+	}
+	idx.maybeResetForRegenesis(3) // the confirming poll
 	if idx.lastBlock != 0 {
-		t.Fatalf("expected rewind to StartBlock 0, got %d", idx.lastBlock)
+		t.Fatalf("expected rewind to StartBlock 0 after %d confirmations, got %d", regenesisConfirmations, idx.lastBlock)
 	}
 	if s.GetLastBlock() != 0 {
 		t.Fatalf("expected persisted cursor reset to 0, got %d", s.GetLastBlock())
@@ -195,5 +286,35 @@ func TestPoll_ShallowReorgNoReset(t *testing.T) {
 	idx.maybeResetForRegenesis(995) // 5 blocks back — within reorgDepth
 	if idx.lastBlock != 1000 {
 		t.Fatalf("shallow reorg must not reset; lastBlock=%d", idx.lastBlock)
+	}
+}
+
+// An idle/lagging RPC that momentarily reports a low head and then RECOVERS must
+// NOT wipe the cursor (re-genesis hysteresis — the DoS-amplification case Red
+// flagged: a single low reading must not trigger a full re-index from genesis).
+func TestPoll_IdleLowHeadRecoversNoWipe(t *testing.T) {
+	s := newMemSQLiteStore(t)
+	s.SetLastBlock(5_000_000)
+	idx := NewWithConfig(Config{RPC: "http://unused", StartBlock: 0}, s)
+
+	// A couple of transient low readings (idle "Building block" / lag) — fewer than
+	// the confirmation window — must not rewind.
+	idx.maybeResetForRegenesis(0) // idle: eth_blockNumber=0x0
+	idx.maybeResetForRegenesis(1)
+	if idx.lastBlock != 5_000_000 {
+		t.Fatalf("transient low head must not wipe; lastBlock=%d", idx.lastBlock)
+	}
+	// RPC recovers to the true height — the streak must clear, no wipe ever.
+	idx.maybeResetForRegenesis(5_000_001)
+	if idx.lastBlock != 5_000_000 {
+		t.Fatalf("recovered head must not wipe; lastBlock=%d", idx.lastBlock)
+	}
+	if idx.lowHeadStreak != 0 {
+		t.Fatalf("recovery must clear the low-head streak, got %d", idx.lowHeadStreak)
+	}
+	// And a subsequent single low blip still must not wipe (streak restarts at 1).
+	idx.maybeResetForRegenesis(2)
+	if idx.lastBlock != 5_000_000 {
+		t.Fatalf("post-recovery single blip must not wipe; lastBlock=%d", idx.lastBlock)
 	}
 }
