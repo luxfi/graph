@@ -26,21 +26,83 @@ type Status struct {
 	IndexedEvents uint64 `json:"indexedEvents"`
 }
 
-// Indexer watches an EVM RPC and writes events to storage.
-type Indexer struct {
-	rpc    string
-	store  *storage.Store
-	client *http.Client
-
-	lastBlock uint64
-	status    Status
+// Config tunes an Indexer. The zero value is valid: PoolManager defaults to the
+// canonical 0x9999 settlement address and StartBlock to 0 (index from genesis).
+type Config struct {
+	RPC string
+	// PoolManager is the DEX settlement precompile address (0x9999). Logs from
+	// this address are additionally derived into the DEX (CLOB) graph schema as
+	// Fill/Market entities. Lower-cased on construction for case-insensitive
+	// compare against eth_getLogs `address` fields.
+	PoolManager string
+	// StartBlock is the genesis-relative block to (re)index from. On a clean
+	// chain relaunch the indexer rewinds to this value (see poll's reorg guard).
+	StartBlock uint64
 }
 
-// New creates an indexer connected to the given RPC endpoint.
+// reorgDepth is how far the chain head may legitimately move backwards (deep
+// reorg) before we treat a lower head as a chain RESET (re-genesis) rather than
+// a reorg. A re-genesised chain reports a head far below our persisted cursor;
+// a normal reorg is shallow. This avoids wiping progress on a transient blip
+// while still self-healing across a clean relaunch.
+const reorgDepth = 128
+
+// regenesisConfirmations is how many CONSECUTIVE polls must observe a head far
+// below our cursor before we even SPEND an RPC to confirm a re-genesis. A single
+// low reading is NOT enough: an idle chain ("Building block", head=0x0) or a briefly
+// lagging RPC backend can momentarily report a head below our cursor, and probing on
+// every blip would be wasteful. A genuine relaunch keeps the head low for many polls
+// as the fresh chain rebuilds; a transient dip recovers within one or two. The streak
+// is a CHEAP PRE-FILTER only — the rewind itself is gated on a deterministic signal
+// (a changed genesis hash), so even a head held low for the full window by a deeply
+// lagging load-balanced backend never wipes a still-canonical chain.
+const regenesisConfirmations = 3
+
+// genesisBlockTag is the block selector for the genesis (block 0) header. The
+// genesis hash is the chain-identity fingerprint we compare to decide a re-genesis:
+// every node of a chain has block 0 regardless of how far behind its head is, so an
+// equal genesis hash deterministically rules out a re-genesis even on a deeply-stale
+// backend — unlike a by-number/by-hash probe of the CURSOR block, which a backend
+// whose head is below the cursor cannot serve (it would null-out and false-trip).
+const genesisBlockTag = "0x0"
+
+// Indexer watches an EVM RPC and writes events to storage.
+type Indexer struct {
+	rpc         string
+	poolManager string // lower-cased 0x9999 settlement address
+	startBlock  uint64
+	store       *storage.Store
+	client      *http.Client
+
+	lastBlock     uint64
+	lowHeadStreak int    // consecutive polls observing a head far below the cursor (re-genesis pre-filter)
+	genesisHash   string // chain-identity fingerprint; a change ⇒ true re-genesis (lazily captured)
+	status        Status
+
+	// genesisHashFn fetches the chain's genesis (block 0) hash. It is a field so
+	// tests can drive the canonicality decision deterministically without a live
+	// RPC; in production it is fetchGenesisHash (eth_getBlockByNumber 0x0). Honors
+	// the no-eth_getCode rule — only a block header is read.
+	genesisHashFn func(ctx context.Context) (string, error)
+}
+
+// New creates an indexer connected to the given RPC endpoint with default
+// settlement address and a genesis (block 0) start.
 func New(rpc string, store *storage.Store) *Indexer {
+	return NewWithConfig(Config{RPC: rpc}, store)
+}
+
+// NewWithConfig creates an indexer from an explicit Config.
+func NewWithConfig(cfg Config, store *storage.Store) *Indexer {
+	pm := cfg.PoolManager
+	if pm == "" {
+		pm = LXSettleAddress
+	}
 	idx := &Indexer{
-		rpc:   rpc,
-		store: store,
+		rpc:         cfg.RPC,
+		poolManager: strings.ToLower(pm),
+		startBlock:  cfg.StartBlock,
+		store:       store,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
@@ -50,13 +112,125 @@ func New(rpc string, store *storage.Store) *Indexer {
 			},
 		},
 	}
+	idx.genesisHashFn = idx.fetchGenesisHash
 	idx.lastBlock = idx.store.GetLastBlock()
+	if idx.lastBlock < cfg.StartBlock {
+		idx.lastBlock = cfg.StartBlock
+	}
 	return idx
+}
+
+// fetchGenesisHash reads the chain's genesis (block 0) header hash via
+// eth_getBlockByNumber. Only the header is fetched (txs=false); this honors the
+// no-eth_getCode rule and is cheap. The genesis hash is the chain-identity
+// fingerprint used to distinguish a true re-genesis (hash changed) from a merely
+// lagging/idle backend on the same chain (hash unchanged).
+func (idx *Indexer) fetchGenesisHash(ctx context.Context) (string, error) {
+	raw, err := idx.rpcCall(ctx, "eth_getBlockByNumber", []interface{}{genesisBlockTag, false})
+	if err != nil {
+		return "", err
+	}
+	var head struct {
+		Hash string `json:"hash"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return "", fmt.Errorf("parse genesis header: %w", err)
+	}
+	if head.Hash == "" {
+		return "", fmt.Errorf("genesis header missing hash")
+	}
+	return strings.ToLower(head.Hash), nil
+}
+
+// ensureGenesisHash lazily captures the current chain's genesis hash as the
+// baseline the first time it succeeds. Idempotent and a no-op once set (a string
+// check), so it costs one RPC only on the first successful poll. Capturing the
+// baseline before any reset decision guarantees maybeResetForRegenesis always has
+// something to compare against.
+func (idx *Indexer) ensureGenesisHash(ctx context.Context) {
+	if idx.genesisHash != "" {
+		return
+	}
+	h, err := idx.genesisHashFn(ctx)
+	if err != nil {
+		log.Printf("[indexer] genesis hash baseline unavailable (will retry): %v", err)
+		return
+	}
+	idx.genesisHash = h
 }
 
 // Status returns current indexer progress.
 func (idx *Indexer) Status() Status {
 	return idx.status
+}
+
+// maybeResetForRegenesis rewinds the cursor to StartBlock ONLY on a confirmed
+// re-genesis: the chain's genesis hash has changed. A re-genesised chain reports a
+// head near zero while our store still holds the old chain's height; without this
+// rewind `latest <= lastBlock` would hold forever and the new chain would never index.
+//
+// Two gates, in order:
+//
+//  1. CHEAP PRE-FILTER (hysteresis): the head must stay far below our cursor for
+//     regenesisConfirmations consecutive polls. A shallow reorg, an idle chain
+//     ("Building block", head=0x0), or a transient lag clears the streak before we
+//     spend any extra RPC. This keeps the common case free of probes.
+//
+//  2. DETERMINISTIC SIGNAL: only after the streak confirms do we fetch the current
+//     genesis hash and compare it to our captured baseline. A CHANGED hash ⇒ a
+//     different chain ⇒ true re-genesis ⇒ rewind. An UNCHANGED hash ⇒ the same chain
+//     behind a deeply-stale/idle/load-balanced backend ⇒ we must NOT wipe; we clear
+//     the streak (it is proven not a reset) and keep the cursor. Because every node
+//     of a chain serves block 0 regardless of how far behind its head is, this signal
+//     cannot be false-tripped by lag — unlike the poll count alone, which a backend
+//     held >reorgDepth behind for the full window would satisfy on a still-canonical
+//     chain.
+//
+// If the baseline genesis hash is not yet captured (first run, or the probe failed),
+// we capture the current one and decline to wipe this round — a reset cannot be
+// proven without a baseline to compare against.
+func (idx *Indexer) maybeResetForRegenesis(ctx context.Context, latest uint64) {
+	farBelow := idx.lastBlock > idx.startBlock+reorgDepth && latest+reorgDepth < idx.lastBlock
+	if !farBelow {
+		idx.lowHeadStreak = 0 // head recovered (or normal) — abandon any suspicion.
+		return
+	}
+	idx.lowHeadStreak++
+	if idx.lowHeadStreak < regenesisConfirmations {
+		log.Printf("[indexer] head %d << cursor %d (>%d behind) — suspected chain reset, awaiting confirmation %d/%d",
+			latest, idx.lastBlock, reorgDepth, idx.lowHeadStreak, regenesisConfirmations)
+		return
+	}
+
+	// Streak confirmed — spend one RPC for the deterministic check.
+	current, err := idx.genesisHashFn(ctx)
+	if err != nil {
+		log.Printf("[indexer] head %d << cursor %d for %d polls but genesis-hash probe failed (%v) — "+
+			"NOT wiping; cannot confirm a reset without a canonical signal", latest, idx.lastBlock, idx.lowHeadStreak, err)
+		return
+	}
+	if idx.genesisHash == "" {
+		// No baseline yet — adopt the current hash and decline to wipe this round.
+		idx.genesisHash = current
+		log.Printf("[indexer] head %d << cursor %d but no genesis baseline yet — captured %s, NOT wiping",
+			latest, idx.lastBlock, current)
+		return
+	}
+	if current == idx.genesisHash {
+		// Same chain, just deeply behind/idle. The poll-count gate alone would have
+		// wiped here; the genesis hash proves it canonical, so we hold the cursor.
+		log.Printf("[indexer] head %d << cursor %d for %d polls but genesis hash unchanged (%s) — "+
+			"canonical chain behind a stale backend, NOT wiping", latest, idx.lastBlock, idx.lowHeadStreak, current)
+		idx.lowHeadStreak = 0
+		return
+	}
+
+	log.Printf("[indexer] genesis hash changed %s -> %s (head %d << cursor %d) — re-genesis confirmed, rewinding to %d",
+		idx.genesisHash, current, latest, idx.lastBlock, idx.startBlock)
+	idx.lastBlock = idx.startBlock
+	idx.store.SetLastBlock(idx.startBlock)
+	idx.genesisHash = current
+	idx.lowHeadStreak = 0
 }
 
 // Run starts the indexer loop. Blocks until ctx is cancelled.
@@ -140,6 +314,8 @@ func knownTopics() []string {
 		SigPoolCreated, SigInitialize, SigSwapV3, SigMintV3, SigBurnV3,
 		SigCollect, SigFlash,
 		SigInitializeV4, SigModifyLiquidity, SigSwapV4,
+		// Native DEX (CLOB) settlement at 0x9999.
+		SigDEXFill,
 	}
 	// Securities — full ERC-3643 + ONCHAINID surface.
 	return append(topics, SecuritiesTopics()...)
@@ -171,6 +347,11 @@ func (idx *Indexer) poll(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("parse hex block: %w", err)
 	}
+
+	// Capture the genesis-hash baseline (once) before any reset decision, then
+	// run the re-genesis self-heal (see maybeResetForRegenesis).
+	idx.ensureGenesisHash(ctx)
+	idx.maybeResetForRegenesis(ctx, latest)
 
 	// Nothing new
 	if latest <= idx.lastBlock {
@@ -239,9 +420,14 @@ func (idx *Indexer) processLog(l *logEntry) {
 		idx.handlePoolCreated(l)
 	case SigTransfer:
 		idx.handleTransfer(l, txHash, logIdx)
+	case SigInitializeV4:
+		idx.handleInitializeV4(l)
+	case SigSwapV4:
+		idx.handleSwapV4(l, blockNum, txHash, logIdx)
+	case SigDEXFill:
+		idx.handleDEXFill(l, blockNum, txHash, logIdx)
 	case SigMintV2, SigMintV3, SigBurnV2, SigBurnV3, SigSync,
-		SigCollect, SigFlash, SigInitialize,
-		SigInitializeV4, SigModifyLiquidity, SigSwapV4:
+		SigCollect, SigFlash, SigInitialize, SigModifyLiquidity:
 		// Recognized but storage for these types not yet wired
 
 	// ── ERC-3643 IToken ───────────────────────────────────────────────
@@ -311,6 +497,9 @@ func (idx *Indexer) processLog(l *logEntry) {
 }
 
 // decodeUint256 reads a 32-byte hex word from data at the given word index.
+// Malformed hex (a non-hex digit in the word) yields 0 rather than a silently
+// half-parsed value: SetString reports ok=false and leaves n unmodified, so we
+// reset to a clean zero. A bad word must not masquerade as a real (partial) amount.
 func decodeUint256(data string, wordIndex int) *big.Int {
 	data = strings.TrimPrefix(data, "0x")
 	start := wordIndex * 64
@@ -318,7 +507,9 @@ func decodeUint256(data string, wordIndex int) *big.Int {
 		return new(big.Int)
 	}
 	n := new(big.Int)
-	n.SetString(data[start:start+64], 16)
+	if _, ok := n.SetString(data[start:start+64], 16); !ok {
+		return new(big.Int)
+	}
 	return n
 }
 
@@ -394,6 +585,7 @@ func (idx *Indexer) handlePairCreated(l *logEntry) {
 	})
 	idx.store.SeedToken(token0, &storage.SeedTokenData{Symbol: token0[:8], Name: token0, Decimals: 18})
 	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: token1[:8], Name: token1, Decimals: 18})
+	idx.bumpFactory(1)
 }
 
 func (idx *Indexer) handlePoolCreated(l *logEntry) {
@@ -419,6 +611,7 @@ func (idx *Indexer) handlePoolCreated(l *logEntry) {
 	})
 	idx.store.SeedToken(token0, &storage.SeedTokenData{Symbol: token0[:8], Name: token0, Decimals: 18})
 	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: token1[:8], Name: token1, Decimals: 18})
+	idx.bumpFactory(1)
 }
 
 func (idx *Indexer) handleTransfer(l *logEntry, txHash, logIdx string) {
@@ -428,4 +621,205 @@ func (idx *Indexer) handleTransfer(l *logEntry, txHash, logIdx string) {
 			Symbol: l.Address[:8], Name: l.Address, Decimals: 18,
 		})
 	}
+}
+
+// decodeInt256 reads a 32-byte word as a signed two's-complement big.Int. V4
+// emits amount0/amount1 as int128 (sign-extended into a 32-byte word), so a
+// straight unsigned read would misreport negative legs as astronomically large.
+func decodeInt256(data string, wordIndex int) *big.Int {
+	n := decodeUint256(data, wordIndex)
+	// Words with the high bit set are negative: subtract 2^256.
+	if n.Bit(255) == 1 {
+		twoExp256 := new(big.Int).Lsh(big.NewInt(1), 256)
+		n.Sub(n, twoExp256)
+	}
+	return n
+}
+
+// bumpFactory increments the singleton factory ("1") aggregate so the
+// dashboard `factory`/`factories`/`uniswapFactories` query returns non-zero
+// pool/tx counts. One place, called from every pool/pair creation handler —
+// the factory aggregate was previously only ever seeded by tests, leaving the
+// exchange landing page's TVL/volume header empty even with live pools.
+func (idx *Indexer) bumpFactory(deltaPools int64) {
+	f, _ := idx.store.GetFactory(nil, "1")
+	var pc, tc int64
+	var tvl, vol string
+	if m, ok := f.(map[string]interface{}); ok {
+		pc = asInt64(m["poolCount"])
+		tc = asInt64(m["txCount"])
+		// Carry the accumulated USD aggregates through the read-modify-write.
+		// SeedFactory is INSERT OR REPLACE (full overwrite); writing them empty
+		// here would clobber the landing-page header's TVL/volume on every
+		// pool-create / swap. They are accumulated elsewhere (price oracle / day
+		// data); bumpFactory only owns the pool + tx counts and must preserve the rest.
+		tvl = asString(m["totalValueLockedUSD"])
+		vol = asString(m["totalVolumeUSD"])
+	}
+	idx.store.SeedFactory("1", &storage.SeedFactoryData{
+		PoolCount:           pc + deltaPools,
+		TxCount:             tc + 1,
+		TotalValueLockedUSD: tvl,
+		TotalVolumeUSD:      vol,
+	})
+}
+
+// asString coerces a JSON-decoded value to its string form, returning "" for nil
+// so a missing aggregate carries through a read-modify-write as empty (not "<nil>").
+func asString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
+}
+
+// asInt64 best-effort coerces a JSON-decoded numeric (float64/json.Number/int)
+// to int64 for aggregate accumulation.
+func asInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	default:
+		var out int64
+		fmt.Sscanf(fmt.Sprint(v), "%d", &out)
+		return out
+	}
+}
+
+// handleInitializeV4 records a V4 pool (Initialize at the PoolManager). The
+// pool id is the indexed bytes32 `id`; token0/token1 are the indexed
+// currency0/currency1. Fee is the first data word. Pools created by the 0x9999
+// settlement manager are ALSO surfaced as DEX (CLOB) Market entities.
+func (idx *Indexer) handleInitializeV4(l *logEntry) {
+	if len(l.Topics) < 4 {
+		return
+	}
+	poolID := l.Topics[1] // full 32-byte id
+	token0 := topicAddr(l.Topics[2])
+	token1 := topicAddr(l.Topics[3])
+	fee := decodeUint256(l.Data, 0).Int64()
+
+	idx.store.SeedPool(poolID, &storage.SeedPoolData{
+		Token0:  token0,
+		Token1:  token1,
+		FeeTier: fee,
+	})
+	idx.store.SeedToken(token0, &storage.SeedTokenData{Symbol: shortAddr(token0), Name: token0, Decimals: 18})
+	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: shortAddr(token1), Name: token1, Decimals: 18})
+	idx.bumpFactory(1)
+
+	if idx.isPoolManager(l.Address) {
+		// MERGE with any stub a prior fill already accumulated (writeFill creates a
+		// volume24h/tradeCount stub when a Fill arrives before its Initialize). The
+		// Initialize supplies the RICH fields (token pair, fee tier); it must NOT
+		// reset the accumulated trade aggregates to zero. Defaults apply only when
+		// the field is absent (no prior stub).
+		mk := map[string]interface{}{
+			"id": poolID, "symbol": poolID, "baseToken": token0, "quoteToken": token1,
+			"feeTier": fee, "volume24h": "0", "tradeCount": int64(0), "lastPrice": "0",
+		}
+		if existing, _ := idx.store.GetByType("Market", poolID); existing != nil {
+			if em, ok := existing.(map[string]interface{}); ok {
+				for _, k := range []string{"volume24h", "tradeCount", "lastPrice", "lastUpdate"} {
+					if v, present := em[k]; present {
+						mk[k] = v
+					}
+				}
+			}
+		}
+		idx.store.SetEntity("Market", poolID, mk)
+	}
+}
+
+// handleSwapV4 records a V4 swap (Swap at any V4 PoolManager) as an AMM swap —
+// amount0/amount1 are signed int128. This is the AMM-side view only. The DEX
+// (CLOB) Fill is NOT derived here: a settled native fill is recorded from its
+// own authoritative DEXFill event (handleDEXFill), so the Fill has exactly one
+// source. A vanilla (non-0x9999) V4 pool emits only this AMM swap, never a fill.
+func (idx *Indexer) handleSwapV4(l *logEntry, blockNum uint64, txHash, logIdx string) {
+	if len(l.Topics) < 3 {
+		return
+	}
+	id := fmt.Sprintf("%s#%s", txHash, logIdx)
+	poolID := l.Topics[1]
+	sender := topicAddr(l.Topics[2])
+	amount0 := decodeInt256(l.Data, 0)
+	amount1 := decodeInt256(l.Data, 1)
+
+	idx.store.SeedSwap(id, &storage.SeedSwapData{
+		Timestamp: int64(blockNum),
+		Pool:      poolID,
+		Amount0:   amount0.String(),
+		Amount1:   amount1.String(),
+		AmountUSD: "0",
+		Sender:    sender,
+	})
+	idx.bumpFactory(0)
+}
+
+// handleDEXFill records a native-CLOB settlement (DEXFill at 0x9999). This is
+// the authoritative settled-fill signal: poolId + taker indexed, amountOut +
+// blockNumber in data. Only logs from the configured PoolManager are honored —
+// a spoofed DEXFill from another address is ignored.
+func (idx *Indexer) handleDEXFill(l *logEntry, blockNum uint64, txHash, logIdx string) {
+	if len(l.Topics) < 3 || !idx.isPoolManager(l.Address) {
+		return
+	}
+	id := fmt.Sprintf("%s#%s", txHash, logIdx)
+	poolID := l.Topics[1]
+	taker := topicAddr(l.Topics[2])
+	amountOut := decodeUint256(l.Data, 0)
+	idx.writeFill(id, poolID, taker, amountOut, int64(blockNum), txHash)
+}
+
+// writeFill persists a DEX (CLOB) Fill entity and rolls its volume into the
+// market aggregate. Shared by the V4-swap-at-0x9999 derivation and the explicit
+// DEXFill handler so there is one fill-shape and one market-rollup path.
+func (idx *Indexer) writeFill(id, poolID, taker string, amountOut *big.Int, ts int64, txHash string) {
+	idx.store.SetEntity("Fill", id, map[string]interface{}{
+		"id": id, "market": poolID, "taker": taker,
+		"amountOut": amountOut.String(), "timestamp": ts, "txHash": txHash,
+	})
+
+	// Market rollup — accumulate volume + trade count, keyed by pool id.
+	var vol = new(big.Int)
+	var tc int64
+	if m, _ := idx.store.GetByType("Market", poolID); m != nil {
+		if mm, ok := m.(map[string]interface{}); ok {
+			vol.SetString(fmt.Sprint(mm["volume24h"]), 10)
+			tc = asInt64(mm["tradeCount"])
+			vol.Add(vol, amountOut)
+			mm["volume24h"] = vol.String()
+			mm["tradeCount"] = tc + 1
+			mm["lastUpdate"] = ts
+			idx.store.SetEntity("Market", poolID, mm)
+			return
+		}
+	}
+	// First fill for a market we never saw an Initialize for — create a stub.
+	idx.store.SetEntity("Market", poolID, map[string]interface{}{
+		"id": poolID, "symbol": poolID, "volume24h": amountOut.String(),
+		"tradeCount": int64(1), "lastUpdate": ts,
+	})
+}
+
+// isPoolManager reports whether a log address is the configured 0x9999
+// settlement precompile (case-insensitive).
+func (idx *Indexer) isPoolManager(addr string) bool {
+	return strings.EqualFold(addr, idx.poolManager)
+}
+
+// shortAddr returns a stable short symbol for an unknown token address.
+func shortAddr(addr string) string {
+	if len(addr) >= 8 {
+		return addr[:8]
+	}
+	return addr
 }
