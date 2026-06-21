@@ -48,14 +48,23 @@ type Config struct {
 const reorgDepth = 128
 
 // regenesisConfirmations is how many CONSECUTIVE polls must observe a head far
-// below our cursor before we treat it as a re-genesis and rewind. A single low
-// reading is NOT enough: an idle chain ("Building block", head=0x0) or a briefly
-// lagging RPC backend can momentarily report a head below our cursor, and a
-// single-poll rewind would wipe progress and re-index from genesis on every blip
-// (DoS amplification). A genuine relaunch keeps the head low for many polls as the
-// fresh chain rebuilds; a transient dip recovers within one or two. Requiring a
-// sustained streak distinguishes the two without an extra RPC in the common case.
+// below our cursor before we even SPEND an RPC to confirm a re-genesis. A single
+// low reading is NOT enough: an idle chain ("Building block", head=0x0) or a briefly
+// lagging RPC backend can momentarily report a head below our cursor, and probing on
+// every blip would be wasteful. A genuine relaunch keeps the head low for many polls
+// as the fresh chain rebuilds; a transient dip recovers within one or two. The streak
+// is a CHEAP PRE-FILTER only — the rewind itself is gated on a deterministic signal
+// (a changed genesis hash), so even a head held low for the full window by a deeply
+// lagging load-balanced backend never wipes a still-canonical chain.
 const regenesisConfirmations = 3
+
+// genesisBlockTag is the block selector for the genesis (block 0) header. The
+// genesis hash is the chain-identity fingerprint we compare to decide a re-genesis:
+// every node of a chain has block 0 regardless of how far behind its head is, so an
+// equal genesis hash deterministically rules out a re-genesis even on a deeply-stale
+// backend — unlike a by-number/by-hash probe of the CURSOR block, which a backend
+// whose head is below the cursor cannot serve (it would null-out and false-trip).
+const genesisBlockTag = "0x0"
 
 // Indexer watches an EVM RPC and writes events to storage.
 type Indexer struct {
@@ -66,8 +75,15 @@ type Indexer struct {
 	client      *http.Client
 
 	lastBlock     uint64
-	lowHeadStreak int // consecutive polls observing a head far below the cursor (re-genesis hysteresis)
+	lowHeadStreak int    // consecutive polls observing a head far below the cursor (re-genesis pre-filter)
+	genesisHash   string // chain-identity fingerprint; a change ⇒ true re-genesis (lazily captured)
 	status        Status
+
+	// genesisHashFn fetches the chain's genesis (block 0) hash. It is a field so
+	// tests can drive the canonicality decision deterministically without a live
+	// RPC; in production it is fetchGenesisHash (eth_getBlockByNumber 0x0). Honors
+	// the no-eth_getCode rule — only a block header is read.
+	genesisHashFn func(ctx context.Context) (string, error)
 }
 
 // New creates an indexer connected to the given RPC endpoint with default
@@ -96,6 +112,7 @@ func NewWithConfig(cfg Config, store *storage.Store) *Indexer {
 			},
 		},
 	}
+	idx.genesisHashFn = idx.fetchGenesisHash
 	idx.lastBlock = idx.store.GetLastBlock()
 	if idx.lastBlock < cfg.StartBlock {
 		idx.lastBlock = cfg.StartBlock
@@ -103,24 +120,76 @@ func NewWithConfig(cfg Config, store *storage.Store) *Indexer {
 	return idx
 }
 
+// fetchGenesisHash reads the chain's genesis (block 0) header hash via
+// eth_getBlockByNumber. Only the header is fetched (txs=false); this honors the
+// no-eth_getCode rule and is cheap. The genesis hash is the chain-identity
+// fingerprint used to distinguish a true re-genesis (hash changed) from a merely
+// lagging/idle backend on the same chain (hash unchanged).
+func (idx *Indexer) fetchGenesisHash(ctx context.Context) (string, error) {
+	raw, err := idx.rpcCall(ctx, "eth_getBlockByNumber", []interface{}{genesisBlockTag, false})
+	if err != nil {
+		return "", err
+	}
+	var head struct {
+		Hash string `json:"hash"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return "", fmt.Errorf("parse genesis header: %w", err)
+	}
+	if head.Hash == "" {
+		return "", fmt.Errorf("genesis header missing hash")
+	}
+	return strings.ToLower(head.Hash), nil
+}
+
+// ensureGenesisHash lazily captures the current chain's genesis hash as the
+// baseline the first time it succeeds. Idempotent and a no-op once set (a string
+// check), so it costs one RPC only on the first successful poll. Capturing the
+// baseline before any reset decision guarantees maybeResetForRegenesis always has
+// something to compare against.
+func (idx *Indexer) ensureGenesisHash(ctx context.Context) {
+	if idx.genesisHash != "" {
+		return
+	}
+	h, err := idx.genesisHashFn(ctx)
+	if err != nil {
+		log.Printf("[indexer] genesis hash baseline unavailable (will retry): %v", err)
+		return
+	}
+	idx.genesisHash = h
+}
+
 // Status returns current indexer progress.
 func (idx *Indexer) Status() Status {
 	return idx.status
 }
 
-// maybeResetForRegenesis rewinds the cursor to StartBlock when the observed chain
-// head stays far below our persisted cursor for regenesisConfirmations CONSECUTIVE
-// polls — the signature of a clean relaunch (fresh genesis), not a shallow reorg or
-// a transient dip. A re-genesised chain reports a head near zero while our store
-// still holds the old chain's height; without this rewind `latest <= lastBlock`
-// would hold forever and the new chain would never index.
+// maybeResetForRegenesis rewinds the cursor to StartBlock ONLY on a confirmed
+// re-genesis: the chain's genesis hash has changed. A re-genesised chain reports a
+// head near zero while our store still holds the old chain's height; without this
+// rewind `latest <= lastBlock` would hold forever and the new chain would never index.
 //
-// The hysteresis is the fix for an idle/lagging RPC: an idle chain ("Building block",
-// head=0x0) or a backend that briefly reports a stale low head would, under a
-// single-poll rewind, wipe progress and re-index from genesis on every blip (DoS
-// amplification). A genuine relaunch holds the low head across many polls; a transient
-// dip recovers within one or two, clearing the streak before any wipe.
-func (idx *Indexer) maybeResetForRegenesis(latest uint64) {
+// Two gates, in order:
+//
+//  1. CHEAP PRE-FILTER (hysteresis): the head must stay far below our cursor for
+//     regenesisConfirmations consecutive polls. A shallow reorg, an idle chain
+//     ("Building block", head=0x0), or a transient lag clears the streak before we
+//     spend any extra RPC. This keeps the common case free of probes.
+//
+//  2. DETERMINISTIC SIGNAL: only after the streak confirms do we fetch the current
+//     genesis hash and compare it to our captured baseline. A CHANGED hash ⇒ a
+//     different chain ⇒ true re-genesis ⇒ rewind. An UNCHANGED hash ⇒ the same chain
+//     behind a deeply-stale/idle/load-balanced backend ⇒ we must NOT wipe; we clear
+//     the streak (it is proven not a reset) and keep the cursor. Because every node
+//     of a chain serves block 0 regardless of how far behind its head is, this signal
+//     cannot be false-tripped by lag — unlike the poll count alone, which a backend
+//     held >reorgDepth behind for the full window would satisfy on a still-canonical
+//     chain.
+//
+// If the baseline genesis hash is not yet captured (first run, or the probe failed),
+// we capture the current one and decline to wipe this round — a reset cannot be
+// proven without a baseline to compare against.
+func (idx *Indexer) maybeResetForRegenesis(ctx context.Context, latest uint64) {
 	farBelow := idx.lastBlock > idx.startBlock+reorgDepth && latest+reorgDepth < idx.lastBlock
 	if !farBelow {
 		idx.lowHeadStreak = 0 // head recovered (or normal) — abandon any suspicion.
@@ -132,10 +201,35 @@ func (idx *Indexer) maybeResetForRegenesis(latest uint64) {
 			latest, idx.lastBlock, reorgDepth, idx.lowHeadStreak, regenesisConfirmations)
 		return
 	}
-	log.Printf("[indexer] head %d << cursor %d for %d consecutive polls — chain reset confirmed, rewinding to %d",
-		latest, idx.lastBlock, idx.lowHeadStreak, idx.startBlock)
+
+	// Streak confirmed — spend one RPC for the deterministic check.
+	current, err := idx.genesisHashFn(ctx)
+	if err != nil {
+		log.Printf("[indexer] head %d << cursor %d for %d polls but genesis-hash probe failed (%v) — "+
+			"NOT wiping; cannot confirm a reset without a canonical signal", latest, idx.lastBlock, idx.lowHeadStreak, err)
+		return
+	}
+	if idx.genesisHash == "" {
+		// No baseline yet — adopt the current hash and decline to wipe this round.
+		idx.genesisHash = current
+		log.Printf("[indexer] head %d << cursor %d but no genesis baseline yet — captured %s, NOT wiping",
+			latest, idx.lastBlock, current)
+		return
+	}
+	if current == idx.genesisHash {
+		// Same chain, just deeply behind/idle. The poll-count gate alone would have
+		// wiped here; the genesis hash proves it canonical, so we hold the cursor.
+		log.Printf("[indexer] head %d << cursor %d for %d polls but genesis hash unchanged (%s) — "+
+			"canonical chain behind a stale backend, NOT wiping", latest, idx.lastBlock, idx.lowHeadStreak, current)
+		idx.lowHeadStreak = 0
+		return
+	}
+
+	log.Printf("[indexer] genesis hash changed %s -> %s (head %d << cursor %d) — re-genesis confirmed, rewinding to %d",
+		idx.genesisHash, current, latest, idx.lastBlock, idx.startBlock)
 	idx.lastBlock = idx.startBlock
 	idx.store.SetLastBlock(idx.startBlock)
+	idx.genesisHash = current
 	idx.lowHeadStreak = 0
 }
 
@@ -254,8 +348,10 @@ func (idx *Indexer) poll(ctx context.Context) error {
 		return fmt.Errorf("parse hex block: %w", err)
 	}
 
-	// Re-genesis self-heal (see maybeResetForRegenesis).
-	idx.maybeResetForRegenesis(latest)
+	// Capture the genesis-hash baseline (once) before any reset decision, then
+	// run the re-genesis self-heal (see maybeResetForRegenesis).
+	idx.ensureGenesisHash(ctx)
+	idx.maybeResetForRegenesis(ctx, latest)
 
 	// Nothing new
 	if latest <= idx.lastBlock {
