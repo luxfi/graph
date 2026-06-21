@@ -47,6 +47,16 @@ type Config struct {
 // while still self-healing across a clean relaunch.
 const reorgDepth = 128
 
+// regenesisConfirmations is how many CONSECUTIVE polls must observe a head far
+// below our cursor before we treat it as a re-genesis and rewind. A single low
+// reading is NOT enough: an idle chain ("Building block", head=0x0) or a briefly
+// lagging RPC backend can momentarily report a head below our cursor, and a
+// single-poll rewind would wipe progress and re-index from genesis on every blip
+// (DoS amplification). A genuine relaunch keeps the head low for many polls as the
+// fresh chain rebuilds; a transient dip recovers within one or two. Requiring a
+// sustained streak distinguishes the two without an extra RPC in the common case.
+const regenesisConfirmations = 3
+
 // Indexer watches an EVM RPC and writes events to storage.
 type Indexer struct {
 	rpc         string
@@ -55,8 +65,9 @@ type Indexer struct {
 	store       *storage.Store
 	client      *http.Client
 
-	lastBlock uint64
-	status    Status
+	lastBlock     uint64
+	lowHeadStreak int // consecutive polls observing a head far below the cursor (re-genesis hysteresis)
+	status        Status
 }
 
 // New creates an indexer connected to the given RPC endpoint with default
@@ -97,20 +108,35 @@ func (idx *Indexer) Status() Status {
 	return idx.status
 }
 
-// maybeResetForRegenesis rewinds the cursor to StartBlock when the observed
-// chain head is far enough below our persisted cursor to indicate a clean
-// relaunch (fresh genesis) rather than a shallow reorg. A re-genesised chain
-// reports a head near zero while our store still holds the old chain's height;
-// without this rewind, `latest <= lastBlock` would be true forever and the new
-// chain would never be indexed. A normal reorg is shallow (< reorgDepth) and is
-// ignored here so transient head dips don't wipe progress.
+// maybeResetForRegenesis rewinds the cursor to StartBlock when the observed chain
+// head stays far below our persisted cursor for regenesisConfirmations CONSECUTIVE
+// polls — the signature of a clean relaunch (fresh genesis), not a shallow reorg or
+// a transient dip. A re-genesised chain reports a head near zero while our store
+// still holds the old chain's height; without this rewind `latest <= lastBlock`
+// would hold forever and the new chain would never index.
+//
+// The hysteresis is the fix for an idle/lagging RPC: an idle chain ("Building block",
+// head=0x0) or a backend that briefly reports a stale low head would, under a
+// single-poll rewind, wipe progress and re-index from genesis on every blip (DoS
+// amplification). A genuine relaunch holds the low head across many polls; a transient
+// dip recovers within one or two, clearing the streak before any wipe.
 func (idx *Indexer) maybeResetForRegenesis(latest uint64) {
-	if idx.lastBlock > idx.startBlock+reorgDepth && latest+reorgDepth < idx.lastBlock {
-		log.Printf("[indexer] head %d << cursor %d (>%d behind) — chain reset detected, rewinding to %d",
-			latest, idx.lastBlock, reorgDepth, idx.startBlock)
-		idx.lastBlock = idx.startBlock
-		idx.store.SetLastBlock(idx.startBlock)
+	farBelow := idx.lastBlock > idx.startBlock+reorgDepth && latest+reorgDepth < idx.lastBlock
+	if !farBelow {
+		idx.lowHeadStreak = 0 // head recovered (or normal) — abandon any suspicion.
+		return
 	}
+	idx.lowHeadStreak++
+	if idx.lowHeadStreak < regenesisConfirmations {
+		log.Printf("[indexer] head %d << cursor %d (>%d behind) — suspected chain reset, awaiting confirmation %d/%d",
+			latest, idx.lastBlock, reorgDepth, idx.lowHeadStreak, regenesisConfirmations)
+		return
+	}
+	log.Printf("[indexer] head %d << cursor %d for %d consecutive polls — chain reset confirmed, rewinding to %d",
+		latest, idx.lastBlock, idx.lowHeadStreak, idx.startBlock)
+	idx.lastBlock = idx.startBlock
+	idx.store.SetLastBlock(idx.startBlock)
+	idx.lowHeadStreak = 0
 }
 
 // Run starts the indexer loop. Blocks until ctx is cancelled.
@@ -375,6 +401,9 @@ func (idx *Indexer) processLog(l *logEntry) {
 }
 
 // decodeUint256 reads a 32-byte hex word from data at the given word index.
+// Malformed hex (a non-hex digit in the word) yields 0 rather than a silently
+// half-parsed value: SetString reports ok=false and leaves n unmodified, so we
+// reset to a clean zero. A bad word must not masquerade as a real (partial) amount.
 func decodeUint256(data string, wordIndex int) *big.Int {
 	data = strings.TrimPrefix(data, "0x")
 	start := wordIndex * 64
@@ -382,7 +411,9 @@ func decodeUint256(data string, wordIndex int) *big.Int {
 		return new(big.Int)
 	}
 	n := new(big.Int)
-	n.SetString(data[start:start+64], 16)
+	if _, ok := n.SetString(data[start:start+64], 16); !ok {
+		return new(big.Int)
+	}
 	return n
 }
 
@@ -517,14 +548,36 @@ func decodeInt256(data string, wordIndex int) *big.Int {
 func (idx *Indexer) bumpFactory(deltaPools int64) {
 	f, _ := idx.store.GetFactory(nil, "1")
 	var pc, tc int64
+	var tvl, vol string
 	if m, ok := f.(map[string]interface{}); ok {
 		pc = asInt64(m["poolCount"])
 		tc = asInt64(m["txCount"])
+		// Carry the accumulated USD aggregates through the read-modify-write.
+		// SeedFactory is INSERT OR REPLACE (full overwrite); writing them empty
+		// here would clobber the landing-page header's TVL/volume on every
+		// pool-create / swap. They are accumulated elsewhere (price oracle / day
+		// data); bumpFactory only owns the pool + tx counts and must preserve the rest.
+		tvl = asString(m["totalValueLockedUSD"])
+		vol = asString(m["totalVolumeUSD"])
 	}
 	idx.store.SeedFactory("1", &storage.SeedFactoryData{
-		PoolCount: pc + deltaPools,
-		TxCount:   tc + 1,
+		PoolCount:           pc + deltaPools,
+		TxCount:             tc + 1,
+		TotalValueLockedUSD: tvl,
+		TotalVolumeUSD:      vol,
 	})
+}
+
+// asString coerces a JSON-decoded value to its string form, returning "" for nil
+// so a missing aggregate carries through a read-modify-write as empty (not "<nil>").
+func asString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
 }
 
 // asInt64 best-effort coerces a JSON-decoded numeric (float64/json.Number/int)
@@ -567,10 +620,25 @@ func (idx *Indexer) handleInitializeV4(l *logEntry) {
 	idx.bumpFactory(1)
 
 	if idx.isPoolManager(l.Address) {
-		idx.store.SetEntity("Market", poolID, map[string]interface{}{
+		// MERGE with any stub a prior fill already accumulated (writeFill creates a
+		// volume24h/tradeCount stub when a Fill arrives before its Initialize). The
+		// Initialize supplies the RICH fields (token pair, fee tier); it must NOT
+		// reset the accumulated trade aggregates to zero. Defaults apply only when
+		// the field is absent (no prior stub).
+		mk := map[string]interface{}{
 			"id": poolID, "symbol": poolID, "baseToken": token0, "quoteToken": token1,
-			"feeTier": fee, "volume24h": "0", "tradeCount": 0, "lastPrice": "0",
-		})
+			"feeTier": fee, "volume24h": "0", "tradeCount": int64(0), "lastPrice": "0",
+		}
+		if existing, _ := idx.store.GetByType("Market", poolID); existing != nil {
+			if em, ok := existing.(map[string]interface{}); ok {
+				for _, k := range []string{"volume24h", "tradeCount", "lastPrice", "lastUpdate"} {
+					if v, present := em[k]; present {
+						mk[k] = v
+					}
+				}
+			}
+		}
+		idx.store.SetEntity("Market", poolID, mk)
 	}
 }
 
