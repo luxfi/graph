@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/luxfi/graph/wasm"
