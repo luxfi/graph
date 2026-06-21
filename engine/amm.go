@@ -18,6 +18,12 @@ func (e *Engine) registerAMMResolvers() {
 	// v2 + v3 unified
 	e.resolvers["factory"] = e.resolveFactory
 	e.resolvers["factories"] = e.resolveFactories
+	// The Graph's uniswap-v2 subgraph names the factory entity `uniswapFactory(ies)`
+	// (the v3 subgraph uses `factory(ies)`). The exchange frontend and exchange-api
+	// issue both spellings depending on protocol version. They resolve to the same
+	// underlying factory rows, so alias them here — one source, every consumer.
+	e.resolvers["uniswapFactory"] = e.resolveFactory
+	e.resolvers["uniswapFactories"] = e.resolveFactories
 	e.resolvers["bundle"] = e.resolveBundle
 	e.resolvers["bundles"] = e.resolveBundles
 	e.resolvers["pool"] = e.resolvePool
