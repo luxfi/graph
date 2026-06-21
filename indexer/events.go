@@ -156,16 +156,26 @@ func SecuritiesTopics() []string {
 	}
 }
 
-// V4 events (PoolManager singleton pattern)
+// V4 events — Lux LXPool / 0x9999 PoolManager.
+//
+// These topic0 hashes are keccak256 of the EXACT signatures the Lux precompile
+// emits (see ~/work/lux/precompile/dex/events.go). The Lux Swap signature is
+// NOT the upstream Uniswap-v4 one: it carries a trailing uint24 `fee`. Indexing
+// the upstream hash would match nothing.
 const (
 	// Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)
-	SigInitializeV4 = "0x344560c924012b32cbed54ad0e83e24c2cf3e723de46e06c72e6ab3463a7a8c0"
+	SigInitializeV4 = "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438"
 
 	// ModifyLiquidity(bytes32 indexed id, address indexed sender, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt)
-	SigModifyLiquidity = "0xf208f4912782fd87d4a358e8291c46e9fefb649e838a67dcaa5db23503a4f53b"
+	SigModifyLiquidity = "0xf208f4912782fd25c7f114ca3723a2d5dd6f3bcc3ac8db5af63baa85f711d5ec"
 
-	// Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96After, uint128 liquidityAfter, int24 tickAfter)
+	// Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96After, uint128 liquidityAfter, int24 tickAfter, uint24 fee)
 	SigSwapV4 = "0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f"
+
+	// DEXFill(bytes32 indexed poolId, address indexed taker, uint256 amountOut, uint256 blockNumber)
+	// Emitted by the 0x9999 settlement precompile on a Phase-B credit (a settled
+	// native-CLOB fill). This is the indexable signal for the DEX (CLOB) graph.
+	SigDEXFill = "0x6f744d074efc4fa8512636853f8a4c67842f230d4279421c7599dc5c5daf9874"
 
 	// Subscription(uint256 indexed tokenId, address indexed subscriber)
 	SigSubscription = "0x572f161235911da04685a68c6b07422b4ba12dab20405b8b230c2420f49f1266"
@@ -173,6 +183,12 @@ const (
 	// Unsubscription(uint256 indexed tokenId, address indexed subscriber)
 	SigUnsubscription = "0x6112cc683e05f5c607f9d5f0f57a0f0be2ca872a8f94ed4b6e2d09da2f1d1882"
 )
+
+// LXSettleAddress is the Lux DEX settlement precompile (LP-9999) — the V4
+// PoolManager money path. Settled native-DEX fills originate here. Used to
+// distinguish a native-CLOB settlement from a vanilla AMM-v4 swap so the DEX
+// (CLOB) graph schema only ingests genuine fills.
+const LXSettleAddress = "0x0000000000000000000000000000000000009999"
 
 // Known factory addresses per network.
 type NetworkConfig struct {
