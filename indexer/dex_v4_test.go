@@ -1,12 +1,19 @@
 package indexer
 
 import (
+	"context"
 	"fmt"
 	"math/big"
 	"testing"
 
 	"github.com/luxfi/graph/storage"
 )
+
+// fixedGenesis returns a genesisHashFn that always reports the same hash — the
+// signature of a canonical chain (no re-genesis), even when a backend is lagging.
+func fixedGenesis(hash string) func(context.Context) (string, error) {
+	return func(context.Context) (string, error) { return hash, nil }
+}
 
 // word renders a non-negative big.Int as a 64-hex-char ABI word.
 func word(n *big.Int) string { return fmt.Sprintf("%064x", n) }
@@ -251,7 +258,8 @@ func TestBumpFactory_PreservesTVLAndVolume(t *testing.T) {
 
 // The re-genesis self-heal: a persisted cursor far above a freshly-relaunched
 // chain's head must rewind to StartBlock so the new chain indexes from genesis —
-// but only after the low head is CONFIRMED across regenesisConfirmations polls.
+// but only after the low head is CONFIRMED across regenesisConfirmations polls AND
+// the genesis hash has actually CHANGED (the deterministic re-genesis signal).
 func TestPoll_RegenesisSelfHeal(t *testing.T) {
 	s := newMemSQLiteStore(t)
 	s.SetLastBlock(5_000_000) // stale cursor from the previous chain
@@ -259,21 +267,29 @@ func TestPoll_RegenesisSelfHeal(t *testing.T) {
 	if idx.lastBlock != 5_000_000 {
 		t.Fatalf("precondition: lastBlock=%d", idx.lastBlock)
 	}
+	ctx := context.Background()
+	// Baseline: the OLD chain's genesis hash, captured before the relaunch.
+	idx.genesisHash = "0xold"
+	// The fresh chain reports a DIFFERENT genesis hash — the re-genesis signal.
+	idx.genesisHashFn = fixedGenesis("0xnew")
 
 	// A fresh chain reports head=3, far below cursor — sustained across the
 	// confirmation window. Only the FINAL confirming poll rewinds.
 	for i := 0; i < regenesisConfirmations-1; i++ {
-		idx.maybeResetForRegenesis(3)
+		idx.maybeResetForRegenesis(ctx, 3)
 		if idx.lastBlock != 5_000_000 {
 			t.Fatalf("must not rewind before %d confirmations (poll %d), lastBlock=%d", regenesisConfirmations, i+1, idx.lastBlock)
 		}
 	}
-	idx.maybeResetForRegenesis(3) // the confirming poll
+	idx.maybeResetForRegenesis(ctx, 3) // the confirming poll
 	if idx.lastBlock != 0 {
-		t.Fatalf("expected rewind to StartBlock 0 after %d confirmations, got %d", regenesisConfirmations, idx.lastBlock)
+		t.Fatalf("expected rewind to StartBlock 0 after %d confirmations + changed genesis, got %d", regenesisConfirmations, idx.lastBlock)
 	}
 	if s.GetLastBlock() != 0 {
 		t.Fatalf("expected persisted cursor reset to 0, got %d", s.GetLastBlock())
+	}
+	if idx.genesisHash != "0xnew" {
+		t.Fatalf("expected baseline to advance to the new chain's genesis, got %s", idx.genesisHash)
 	}
 }
 
@@ -282,8 +298,13 @@ func TestPoll_ShallowReorgNoReset(t *testing.T) {
 	s := newMemSQLiteStore(t)
 	s.SetLastBlock(1000)
 	idx := NewWithConfig(Config{RPC: "http://unused", StartBlock: 0}, s)
+	idx.genesisHash = "0xsame"
+	idx.genesisHashFn = func(context.Context) (string, error) {
+		t.Fatal("shallow reorg must not even probe the genesis hash")
+		return "", nil
+	}
 
-	idx.maybeResetForRegenesis(995) // 5 blocks back — within reorgDepth
+	idx.maybeResetForRegenesis(context.Background(), 995) // 5 blocks back — within reorgDepth
 	if idx.lastBlock != 1000 {
 		t.Fatalf("shallow reorg must not reset; lastBlock=%d", idx.lastBlock)
 	}
@@ -296,16 +317,22 @@ func TestPoll_IdleLowHeadRecoversNoWipe(t *testing.T) {
 	s := newMemSQLiteStore(t)
 	s.SetLastBlock(5_000_000)
 	idx := NewWithConfig(Config{RPC: "http://unused", StartBlock: 0}, s)
+	ctx := context.Background()
+	idx.genesisHash = "0xsame"
+	idx.genesisHashFn = func(context.Context) (string, error) {
+		t.Fatal("transient/recovering low head must not reach the genesis probe")
+		return "", nil
+	}
 
 	// A couple of transient low readings (idle "Building block" / lag) — fewer than
 	// the confirmation window — must not rewind.
-	idx.maybeResetForRegenesis(0) // idle: eth_blockNumber=0x0
-	idx.maybeResetForRegenesis(1)
+	idx.maybeResetForRegenesis(ctx, 0) // idle: eth_blockNumber=0x0
+	idx.maybeResetForRegenesis(ctx, 1)
 	if idx.lastBlock != 5_000_000 {
 		t.Fatalf("transient low head must not wipe; lastBlock=%d", idx.lastBlock)
 	}
 	// RPC recovers to the true height — the streak must clear, no wipe ever.
-	idx.maybeResetForRegenesis(5_000_001)
+	idx.maybeResetForRegenesis(ctx, 5_000_001)
 	if idx.lastBlock != 5_000_000 {
 		t.Fatalf("recovered head must not wipe; lastBlock=%d", idx.lastBlock)
 	}
@@ -313,8 +340,87 @@ func TestPoll_IdleLowHeadRecoversNoWipe(t *testing.T) {
 		t.Fatalf("recovery must clear the low-head streak, got %d", idx.lowHeadStreak)
 	}
 	// And a subsequent single low blip still must not wipe (streak restarts at 1).
-	idx.maybeResetForRegenesis(2)
+	idx.maybeResetForRegenesis(ctx, 2)
 	if idx.lastBlock != 5_000_000 {
 		t.Fatalf("post-recovery single blip must not wipe; lastBlock=%d", idx.lastBlock)
+	}
+}
+
+// TestPoll_DeeplyBehindButCanonicalNoWipe is the item-4 hardening: a deeply-stale
+// load-balanced RPC backend can report a head >reorgDepth below our cursor for the
+// FULL confirmation window — satisfying the poll-count pre-filter — yet the chain is
+// still canonical. The genesis hash is UNCHANGED, so the cursor must NOT be wiped.
+// Under the old poll-count-only gate this scenario wiped progress and re-indexed
+// from genesis (the false-positive Red flagged).
+func TestPoll_DeeplyBehindButCanonicalNoWipe(t *testing.T) {
+	s := newMemSQLiteStore(t)
+	s.SetLastBlock(5_000_000)
+	idx := NewWithConfig(Config{RPC: "http://unused", StartBlock: 0}, s)
+	ctx := context.Background()
+	idx.genesisHash = "0xcanonical"
+	// The cursor block hash is still valid / genesis unchanged — same chain, just behind.
+	probes := 0
+	idx.genesisHashFn = func(context.Context) (string, error) {
+		probes++
+		return "0xcanonical", nil
+	}
+
+	// Hold the head deeply below the cursor for WELL past the confirmation window.
+	for i := 0; i < regenesisConfirmations*3; i++ {
+		idx.maybeResetForRegenesis(ctx, 3)
+		if idx.lastBlock != 5_000_000 {
+			t.Fatalf("deeply-behind-but-canonical RPC must NOT wipe (iter %d); lastBlock=%d", i, idx.lastBlock)
+		}
+	}
+	if s.GetLastBlock() != 5_000_000 {
+		t.Fatalf("persisted cursor must be intact; got %d", s.GetLastBlock())
+	}
+	if probes == 0 {
+		t.Fatal("expected at least one genesis-hash probe once the streak confirmed")
+	}
+}
+
+// TestPoll_RegenesisHashChangeWipes is the positive companion: a true re-genesis
+// (genesis hash GONE/changed) must wipe to StartBlock, but only after the streak
+// confirms. This is the "cursor hash gone ⇒ wipe" half of the deterministic gate.
+func TestPoll_RegenesisHashChangeWipes(t *testing.T) {
+	s := newMemSQLiteStore(t)
+	s.SetLastBlock(5_000_000)
+	idx := NewWithConfig(Config{RPC: "http://unused", StartBlock: 0}, s)
+	ctx := context.Background()
+	idx.genesisHash = "0xchainA"
+	idx.genesisHashFn = fixedGenesis("0xchainB") // fresh chain — different genesis
+
+	// Pre-confirmation polls must not wipe even though the hash differs (hysteresis
+	// still gates the probe; we only probe once the streak completes).
+	for i := 0; i < regenesisConfirmations-1; i++ {
+		idx.maybeResetForRegenesis(ctx, 2)
+		if idx.lastBlock != 5_000_000 {
+			t.Fatalf("must not wipe before confirmation (iter %d)", i)
+		}
+	}
+	idx.maybeResetForRegenesis(ctx, 2) // confirming poll — genesis changed ⇒ wipe
+	if idx.lastBlock != 0 || s.GetLastBlock() != 0 {
+		t.Fatalf("changed genesis must wipe to StartBlock; lastBlock=%d persisted=%d", idx.lastBlock, s.GetLastBlock())
+	}
+}
+
+// TestPoll_RegenesisProbeFailsNoWipe: if the genesis probe errors at the confirming
+// poll, we cannot prove a reset, so we must NOT wipe.
+func TestPoll_RegenesisProbeFailsNoWipe(t *testing.T) {
+	s := newMemSQLiteStore(t)
+	s.SetLastBlock(5_000_000)
+	idx := NewWithConfig(Config{RPC: "http://unused", StartBlock: 0}, s)
+	ctx := context.Background()
+	idx.genesisHash = "0xbaseline"
+	idx.genesisHashFn = func(context.Context) (string, error) {
+		return "", fmt.Errorf("backend unreachable")
+	}
+
+	for i := 0; i < regenesisConfirmations+2; i++ {
+		idx.maybeResetForRegenesis(ctx, 3)
+	}
+	if idx.lastBlock != 5_000_000 {
+		t.Fatalf("probe failure must not wipe; lastBlock=%d", idx.lastBlock)
 	}
 }
