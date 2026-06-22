@@ -14,12 +14,44 @@ This file (`CLAUDE.md`) is the canonical agent-facing readme; `LLM.md` is a syml
 - `.github/workflows/` — CI surface
 - `docs/` — extended docs (if present)
 
-## Native DEX indexing (0x9999)
+## DEX indexing has TWO orthogonal sources (EVM 0x9999 logs + native D-Chain CLOB)
 
-`graphd` indexes the native CLOB settlement precompile at `0x...9999` into a `dex`
-subgraph (markets/fills/orders/orderbook) alongside the `amm` subgraph (Uniswap
-v2/v3-shaped pools/pairs/swaps/tokens/factories). The two subgraphs serve on the same
-host under distinct slugs (`.../cchain/amm/graphql`, `.../cchain/dex/graphql`).
+The `dex` subgraph (markets/fills/orders/orderbook) can be fed from either or both of:
+
+1. **EVM 0x9999 settlement logs** — the cross-chain SETTLEMENT view. `handleDEXFill`/
+   `handleInitializeV4` derive Market/Fill from `DEXFill`/`Initialize` logs emitted by
+   the 0x9999 PoolManager on an EVM chain (C-Chain). Source = `indexer.go` eth_getLogs.
+2. **Native D-Chain CLOB read RPC** — the TRADING view. On a native-DEX deployment the
+   trade engine IS the D-Chain (dexvm): a trade is a consensus state transition at
+   `Block.Verify`, NOT an EVM event, so it NEVER appears on the EVM RPC. `CLOBSource`
+   (`indexer/clob.go`) polls the committed-state read RPC
+   `…/ext/bc/<D>/dex/clob_get_{markets,trades,orders}` (GET/JSON, READ-ONLY, zero
+   consensus impact — see `luxfi/dex pkg/dchain/read.go`) and writes the SAME
+   Market/Fill/Order entities the resolvers serve. Enabled by `Config.DexRPC` (graph)
+   / `dex_rpc:` per-chain (explorer `chains.yaml`); empty = source 1 only.
+
+The two sources are ORTHOGONAL — distinct loop, distinct protocol, distinct endpoint;
+they share only the store (the sink) and the entity shapes (the contract). Running the
+CLOB source NEVER regresses AMM/EVM indexing (the `amm` subgraph never gets `dex_rpc`).
+Both Markets key by `poolID`, so when both run they converge on one Market per pool:
+`writeMarket` refreshes the live CLOB book summary and MERGES through any EVM-accrued
+`volume24h`/`tradeCount`/`lastPrice` it does not own.
+
+Markets serve on the same host under distinct slugs (`.../cchain/amm/graphql`,
+`.../cchain/dex/graphql`).
+
+### Native CLOB source notes (`clob.go`)
+- **Fills are a GLOBAL feed.** The 80-byte on-chain trade row carries no poolID (frozen
+  GPU ABI), so `clob_get_trades` is a global height-ordered log. `writeTrade` records
+  every fill as a `Fill` (the trade-history view) keyed `height:seq` (deterministic →
+  idempotent re-read). Per-market figures (open orders, depth, best bid/ask, remaining)
+  come from `clob_get_markets`' authoritative per-market book summary — we do NOT
+  fabricate a per-market volume by mis-attributing the global log.
+- **Incremental.** `drainTrades` pages by `since=lastHeight+1`; a steady chain costs one
+  small query per tick. **Symbol decode:** a bound market's hex symbol (`4c55…` =
+  ASCII `LUX/LUSD`) → human pair; an unbound poolID stays hex.
+
+## Native DEX indexing (0x9999) — the EVM-settlement source detail
 
 - **Single Fill source.** A settled fill is recorded ONLY from the authoritative
   `DEXFill` event in `handleDEXFill`. `handleSwapV4` is the AMM-side view and does NOT

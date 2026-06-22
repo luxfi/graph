@@ -49,6 +49,13 @@ type Config struct {
 	// StartBlock is the genesis-relative block to (re)index from. On a clean
 	// chain relaunch the indexer rewinds to this value (see poll's reorg guard).
 	StartBlock uint64
+	// DexRPC, when non-empty, is the native D-Chain (dexvm) CLOB read-RPC root —
+	// e.g. http://node:9650/ext/bc/D/dex. Setting it runs an ADDITIONAL, orthogonal
+	// CLOBSource (clob.go) that polls clob_get_{markets,trades,orders} and writes
+	// the same Market/Fill/Order entities the EVM 0x9999 path writes. This is the
+	// native trading source: a D-Chain trade is a consensus state transition, not an
+	// EVM log, so it never appears on the EVM RPC. Empty => EVM-only (unchanged).
+	DexRPC string
 }
 
 // reorgDepth is how far the chain head may legitimately move backwards (deep
@@ -86,6 +93,10 @@ type Indexer struct {
 	startBlock  uint64
 	store       *storage.Store
 	client      *http.Client
+
+	// clob is the optional native D-Chain CLOB source (clob.go). Non-nil only when
+	// Config.DexRPC is set; Run then drives it in parallel with the EVM poller.
+	clob *CLOBSource
 
 	lastBlock     uint64
 	lowHeadStreak int    // consecutive polls observing a head far below the cursor (re-genesis pre-filter)
@@ -145,6 +156,9 @@ func NewWithConfig(cfg Config, store *storage.Store) *Indexer {
 	idx.lastBlock = idx.store.GetLastBlock()
 	if idx.lastBlock < cfg.StartBlock {
 		idx.lastBlock = cfg.StartBlock
+	}
+	if cfg.DexRPC != "" {
+		idx.clob = NewCLOBSource(cfg.DexRPC, store)
 	}
 	return idx
 }
@@ -262,9 +276,21 @@ func (idx *Indexer) maybeResetForRegenesis(ctx context.Context, latest uint64) {
 	idx.lowHeadStreak = 0
 }
 
-// Run starts the indexer loop. Blocks until ctx is cancelled.
+// Run starts the indexer loop. Blocks until ctx is cancelled. When a native
+// D-Chain CLOB source is configured (Config.DexRPC), its poll loop runs in a
+// sibling goroutine bound to the same ctx — orthogonal to the EVM poller, sharing
+// only the store. A native-DEX chain has its trading state on the D-Chain, not on
+// the EVM RPC, so both sources run to populate the AMM (EVM) and DEX (CLOB) views.
 func (idx *Indexer) Run(ctx context.Context) error {
 	log.Printf("[indexer] starting — rpc=%s lastBlock=%d", idx.rpc, idx.lastBlock)
+
+	if idx.clob != nil {
+		go func() {
+			if err := idx.clob.Run(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("[indexer] clob source: %v", err)
+			}
+		}()
+	}
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
