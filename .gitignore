@@ -1,1 +1,4 @@
 # rebuild 1776010882
+
+# Build artifacts (CI builds binaries on ARC; never commit local builds)
+/graphd
