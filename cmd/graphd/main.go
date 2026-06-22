@@ -103,6 +103,18 @@ func main() {
 		FactoryV3:   os.Getenv("FACTORY_V3"),
 		PoolManager: os.Getenv("POOL_MANAGER"),
 	}, store)
+	// One-shot enrichment of Token rows persisted by an older build with the
+	// address placeholder (symbol == shortAddr). Opt-in via BACKFILL_TOKENS=1 so
+	// a normal start is unchanged; runs before Run so live indexing is not racing
+	// the same SeedToken writes. Cheap: ≤3 eth_calls per placeholder token, no
+	// re-sync. New tokens are enriched on first sight regardless of this flag.
+	if os.Getenv("BACKFILL_TOKENS") == "1" {
+		if n, err := idx.BackfillTokens(ctx); err != nil {
+			slog.Warn("token backfill", "error", err, "enriched", n)
+		} else {
+			slog.Info("token backfill", "enriched", n)
+		}
+	}
 	go func() {
 		if err := idx.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("indexer", "error", err)
