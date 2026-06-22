@@ -84,5 +84,8 @@ func parseLimit(args map[string]interface{}) int {
 	if l, ok := args["first"]; ok {
 		fmt.Sscanf(fmt.Sprint(l), "%d", &limit)
 	}
-	return limit
+	if limit < 1 {
+		limit = 100
+	}
+	return min(limit, 1000)
 }

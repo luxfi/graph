@@ -558,3 +558,159 @@ func TestPoll_MalformedLogDoesNotCrash(t *testing.T) {
 		t.Fatalf("pollGuarded error must identify the recovered panic, got %v", perr)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEDIUM: V2/V3 AMM handlers must be scoped to the canonical factory.
+//
+// handlePairCreated/handlePoolCreated/handleSwapV2/handleSwapV3 fed the SAME
+// Factory/TVL/volume aggregates the V4 handlers now gate to 0x9999, but accepted
+// events from ANY emitter — a parallel path to seed phantom pairs/pools/swaps. The
+// fix gates pair/pool creation to the canonical factory addresses, and Swaps to the
+// pools those canonical events created. These tests prove a rogue emitter seeds
+// nothing and does not inflate the factory aggregate, while the canonical-source
+// event IS honored end-to-end (creation → swap).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Canonical factories used by these tests (distinct from the rogue address). They
+// are passed explicitly so the test does not depend on the package defaults.
+const (
+	testFactoryV2 = "0x00000000000000000000000000000000000000F2"
+	testFactoryV3 = "0x00000000000000000000000000000000000000F3"
+)
+
+// word20InWord32 right-aligns a 20-byte address into a 32-byte ABI data word —
+// the encoding handlePairCreated/handlePoolCreated read the created pair/pool
+// address from (the last 20 bytes of the first data word).
+func word20InWord32(addr string) string {
+	return fmt.Sprintf("%064s", strings.ToLower(strings.TrimPrefix(addr, "0x")))
+}
+
+// pairCreatedLog builds a V2 PairCreated whose created-pair address is `pair`.
+// topics: [sig, token0, token1]; data word0 = pair (right-aligned), word1 = index.
+func pairCreatedLog(emitter, token0, token1, pair string) *logEntry {
+	return &logEntry{
+		Address:         emitter,
+		Topics:          []string{SigPairCreated, addrTopic(token0), addrTopic(token1)},
+		Data:            "0x" + word20InWord32(pair) + word(big.NewInt(1)),
+		BlockNumber:     "0x1",
+		TransactionHash: "0xpair",
+		LogIndex:        "0x0",
+	}
+}
+
+// poolCreatedLog builds a V3 PoolCreated whose created-pool address is `pool`.
+// topics: [sig, token0, token1, fee]; data word0 = pool (right-aligned).
+func poolCreatedLog(emitter, token0, token1 string, fee int64, pool string) *logEntry {
+	return &logEntry{
+		Address:         emitter,
+		Topics:          []string{SigPoolCreated, addrTopic(token0), addrTopic(token1), topic32(fmt.Sprintf("%x", fee))},
+		Data:            "0x" + word20InWord32(pool),
+		BlockNumber:     "0x1",
+		TransactionHash: "0xpool",
+		LogIndex:        "0x0",
+	}
+}
+
+// swapV2Log builds a V2 Swap emitted by `emitter` (the pair contract).
+func swapV2Log(emitter, sender, tx string, amt0In, amt1Out int64) *logEntry {
+	return &logEntry{
+		Address: emitter,
+		Topics:  []string{SigSwapV2, addrTopic(sender)},
+		Data: "0x" + word(big.NewInt(amt0In)) + word(new(big.Int)) +
+			word(new(big.Int)) + word(big.NewInt(amt1Out)),
+		BlockNumber: "0x2", TransactionHash: tx, LogIndex: "0x0",
+	}
+}
+
+// swapV3Log builds a V3 Swap emitted by `emitter` (the pool contract); legs signed.
+func swapV3Log(emitter, sender, tx string, amt0, amt1 int64) *logEntry {
+	return &logEntry{
+		Address:     emitter,
+		Topics:      []string{SigSwapV3, addrTopic(sender), addrTopic(sender)},
+		Data:        "0x" + signedWord(big.NewInt(amt0)) + signedWord(big.NewInt(amt1)),
+		BlockNumber: "0x2", TransactionHash: tx, LogIndex: "0x0",
+	}
+}
+
+func TestHandleV2_RejectsNonFactory(t *testing.T) {
+	const rogue = "0x000000000000000000000000000000000000dEaD"
+	token0 := "0x0000000000000000000000000000000000000011"
+	token1 := "0x0000000000000000000000000000000000000022"
+	rt := "0x00000000000000000000000000000000000000a1" // rogue pair address
+	ct := "0x00000000000000000000000000000000000000b1" // canonical pair address
+
+	s := newMemSQLiteStore(t)
+	idx := NewWithConfig(Config{RPC: "http://unused", FactoryV2: testFactoryV2, FactoryV3: testFactoryV3}, s)
+
+	// --- Rogue PairCreated: nothing seeded, factory not inflated. ---
+	idx.processLog(pairCreatedLog(rogue, token0, token1, rt))
+	if p, _ := s.GetPool(nil, rt); p != nil {
+		t.Error("rogue PairCreated must NOT seed a pair")
+	}
+	if tok, _ := s.GetByType("Token", token0); tok != nil {
+		t.Error("rogue PairCreated must NOT seed a token")
+	}
+	if f, _ := s.GetFactory(nil, "1"); f != nil && asInt64(f.(map[string]interface{})["poolCount"]) != 0 {
+		t.Errorf("rogue PairCreated must NOT inflate factory poolCount, got %v", f)
+	}
+
+	// --- A Swap from the rogue (never-registered) pair: no swap recorded. ---
+	idx.processLog(swapV2Log(rt, token0, "0xspoof", 1000, 2500))
+	if sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil); sw != nil && len(sw.([]interface{})) != 0 {
+		t.Fatalf("Swap from a rogue V2 pair must NOT be recorded, got %d", len(sw.([]interface{})))
+	}
+
+	// --- Canonical PairCreated IS honored; its pair's Swap IS recorded. ---
+	idx.processLog(pairCreatedLog(testFactoryV2, token0, token1, ct))
+	if p, _ := s.GetPool(nil, ct); p == nil {
+		t.Fatal("canonical PairCreated must seed the pair")
+	}
+	if f, _ := s.GetFactory(nil, "1"); f == nil || asInt64(f.(map[string]interface{})["poolCount"]) != 1 {
+		t.Fatalf("canonical PairCreated must bump factory poolCount to 1, got %v", f)
+	}
+	idx.processLog(swapV2Log(ct, token0, "0xreal", 1000, 2500))
+	sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil)
+	if sw == nil || len(sw.([]interface{})) != 1 {
+		t.Fatalf("Swap from the canonical V2 pair must be recorded exactly once, got %v", sw)
+	}
+}
+
+func TestHandleV3_RejectsNonFactory(t *testing.T) {
+	const rogue = "0x000000000000000000000000000000000000dEaD"
+	token0 := "0x0000000000000000000000000000000000000011"
+	token1 := "0x0000000000000000000000000000000000000022"
+	rt := "0x00000000000000000000000000000000000000a3" // rogue pool address
+	ct := "0x00000000000000000000000000000000000000b3" // canonical pool address
+
+	s := newMemSQLiteStore(t)
+	idx := NewWithConfig(Config{RPC: "http://unused", FactoryV2: testFactoryV2, FactoryV3: testFactoryV3}, s)
+
+	// --- Rogue PoolCreated: nothing seeded, factory not inflated. ---
+	idx.processLog(poolCreatedLog(rogue, token0, token1, 3000, rt))
+	if p, _ := s.GetPool(nil, rt); p != nil {
+		t.Error("rogue PoolCreated must NOT seed a pool")
+	}
+	if f, _ := s.GetFactory(nil, "1"); f != nil && asInt64(f.(map[string]interface{})["poolCount"]) != 0 {
+		t.Errorf("rogue PoolCreated must NOT inflate factory poolCount, got %v", f)
+	}
+
+	// --- A Swap from the rogue (never-registered) pool: no swap recorded. ---
+	idx.processLog(swapV3Log(rt, token0, "0xspoof", 1000, -2500))
+	if sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil); sw != nil && len(sw.([]interface{})) != 0 {
+		t.Fatalf("Swap from a rogue V3 pool must NOT be recorded, got %d", len(sw.([]interface{})))
+	}
+
+	// --- Canonical PoolCreated IS honored; its pool's Swap IS recorded with signed legs. ---
+	idx.processLog(poolCreatedLog(testFactoryV3, token0, token1, 3000, ct))
+	if p, _ := s.GetPool(nil, ct); p == nil {
+		t.Fatal("canonical PoolCreated must seed the pool")
+	}
+	if f, _ := s.GetFactory(nil, "1"); f == nil || asInt64(f.(map[string]interface{})["poolCount"]) != 1 {
+		t.Fatalf("canonical PoolCreated must bump factory poolCount to 1, got %v", f)
+	}
+	idx.processLog(swapV3Log(ct, token0, "0xreal", 1000, 2500))
+	sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil)
+	if sw == nil || len(sw.([]interface{})) != 1 {
+		t.Fatalf("Swap from the canonical V3 pool must be recorded exactly once, got %v", sw)
+	}
+}

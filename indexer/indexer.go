@@ -27,7 +27,8 @@ type Status struct {
 }
 
 // Config tunes an Indexer. The zero value is valid: PoolManager defaults to the
-// canonical 0x9999 settlement address and StartBlock to 0 (index from genesis).
+// canonical 0x9999 settlement address, FactoryV2/FactoryV3 to the canonical Lux
+// mainnet AMM factories, and StartBlock to 0 (index from genesis).
 type Config struct {
 	RPC string
 	// PoolManager is the DEX settlement precompile address (0x9999). Logs from
@@ -35,6 +36,15 @@ type Config struct {
 	// Fill/Market entities. Lower-cased on construction for case-insensitive
 	// compare against eth_getLogs `address` fields.
 	PoolManager string
+	// FactoryV2 is the canonical Uniswap-v2 factory. ONLY its PairCreated is
+	// authoritative; pairs it creates are the only valid V2 Swap emitters. A
+	// PairCreated from any other contract is rejected (otherwise anyone could
+	// seed phantom pairs and inflate the public Factory/TVL/volume aggregates).
+	// Lower-cased on construction.
+	FactoryV2 string
+	// FactoryV3 is the canonical Uniswap-v3 factory — same trust-root role as
+	// FactoryV2 for PoolCreated and V3 Swaps. Lower-cased on construction.
+	FactoryV3 string
 	// StartBlock is the genesis-relative block to (re)index from. On a clean
 	// chain relaunch the indexer rewinds to this value (see poll's reorg guard).
 	StartBlock uint64
@@ -70,6 +80,8 @@ const genesisBlockTag = "0x0"
 type Indexer struct {
 	rpc         string
 	poolManager string // lower-cased 0x9999 settlement address
+	factoryV2   string // lower-cased canonical V2 factory (PairCreated trust root)
+	factoryV3   string // lower-cased canonical V3 factory (PoolCreated trust root)
 	startBlock  uint64
 	store       *storage.Store
 	client      *http.Client
@@ -98,9 +110,19 @@ func NewWithConfig(cfg Config, store *storage.Store) *Indexer {
 	if pm == "" {
 		pm = LXSettleAddress
 	}
+	fv2 := cfg.FactoryV2
+	if fv2 == "" {
+		fv2 = LuxMainnet.FactoryV2
+	}
+	fv3 := cfg.FactoryV3
+	if fv3 == "" {
+		fv3 = LuxMainnet.FactoryV3
+	}
 	idx := &Indexer{
 		rpc:         cfg.RPC,
 		poolManager: strings.ToLower(pm),
+		factoryV2:   strings.ToLower(fv2),
+		factoryV3:   strings.ToLower(fv3),
 		startBlock:  cfg.StartBlock,
 		store:       store,
 		client: &http.Client{
@@ -535,6 +557,14 @@ func topicAddr(topic string) string {
 }
 
 func (idx *Indexer) handleSwapV2(l *logEntry, blockNum uint64, txHash, logIdx string) {
+	// A V2 Swap is emitted by the pair contract, NOT the factory — so the gate is
+	// "is the emitter a pair the canonical V2 factory created?". handlePairCreated
+	// (gated to factoryV2) is the ONLY path that registers a pair, so a Swap from a
+	// rogue pair was never registered and is dropped here. This closes the parallel
+	// bypass into the same SeedSwap/factory volume aggregates the V4 path now gates.
+	if !idx.isKnownPool(l.Address) {
+		return
+	}
 	id := fmt.Sprintf("%s#%s", txHash, logIdx)
 	sender := ""
 	if len(l.Topics) > 1 {
@@ -560,6 +590,12 @@ func (idx *Indexer) handleSwapV2(l *logEntry, blockNum uint64, txHash, logIdx st
 }
 
 func (idx *Indexer) handleSwapV3(l *logEntry, blockNum uint64, txHash, logIdx string) {
+	// Same trust model as handleSwapV2: a V3 Swap is emitted by the pool, which is
+	// only registered via handlePoolCreated (gated to factoryV3). A Swap from an
+	// unregistered (rogue) pool is dropped.
+	if !idx.isKnownPool(l.Address) {
+		return
+	}
 	id := fmt.Sprintf("%s#%s", txHash, logIdx)
 	sender := ""
 	if len(l.Topics) > 1 {
@@ -579,7 +615,12 @@ func (idx *Indexer) handleSwapV3(l *logEntry, blockNum uint64, txHash, logIdx st
 }
 
 func (idx *Indexer) handlePairCreated(l *logEntry) {
-	if len(l.Topics) < 3 {
+	// Scope to the canonical V2 factory (the trust root), exactly as the V4
+	// handlers scope to 0x9999. A PairCreated from any other contract is rejected:
+	// honoring it would let anyone seed phantom pairs/tokens and inflate the
+	// explorer's public Factory/TVL/volume aggregates — and would register a rogue
+	// pair address whose Swaps would then be accepted (the parallel bypass).
+	if len(l.Topics) < 3 || !strings.EqualFold(l.Address, idx.factoryV2) {
 		return
 	}
 	data := strings.TrimPrefix(l.Data, "0x")
@@ -589,7 +630,9 @@ func (idx *Indexer) handlePairCreated(l *logEntry) {
 	token0 := topicAddr(l.Topics[1])
 	token1 := topicAddr(l.Topics[2])
 	pair := "0x" + data[:64]
-	pair = topicAddr("0x" + pair[len(pair)-40:])
+	// Lower-case the pair key so isKnownPool's Swap-side lookup matches regardless
+	// of how the RPC backend cased the emitter address (the V2 Swap's l.Address).
+	pair = strings.ToLower(topicAddr("0x" + pair[len(pair)-40:]))
 
 	idx.store.SeedPool(pair, &storage.SeedPoolData{
 		Token0:  token0,
@@ -602,7 +645,11 @@ func (idx *Indexer) handlePairCreated(l *logEntry) {
 }
 
 func (idx *Indexer) handlePoolCreated(l *logEntry) {
-	if len(l.Topics) < 4 {
+	// Scope to the canonical V3 factory (the trust root), mirroring handlePairCreated
+	// and the V4 0x9999 gate. A PoolCreated from a rogue contract is rejected so it
+	// can neither inflate the Factory/TVL aggregates nor register a rogue pool whose
+	// Swaps would be honored.
+	if len(l.Topics) < 4 || !strings.EqualFold(l.Address, idx.factoryV3) {
 		return
 	}
 	data := strings.TrimPrefix(l.Data, "0x")
@@ -614,8 +661,9 @@ func (idx *Indexer) handlePoolCreated(l *logEntry) {
 	feeHex := strings.TrimPrefix(l.Topics[3], "0x")
 	fee, _ := strconv.ParseInt(feeHex, 16, 64)
 
-	// Pool address is in data (last 20 bytes of first 32-byte word if padded, or second word)
-	pool := topicAddr("0x" + strings.TrimPrefix(l.Data, "0x"))
+	// Pool address is in data (last 20 bytes of first 32-byte word if padded, or second word).
+	// Lower-cased so isKnownPool's V3 Swap-side lookup matches the emitter regardless of RPC casing.
+	pool := strings.ToLower(topicAddr("0x" + strings.TrimPrefix(l.Data, "0x")))
 
 	idx.store.SeedPool(pool, &storage.SeedPoolData{
 		Token0:  token0,
@@ -832,6 +880,19 @@ func (idx *Indexer) writeFill(id, poolID, taker string, amountOut *big.Int, ts i
 // settlement precompile (case-insensitive).
 func (idx *Indexer) isPoolManager(addr string) bool {
 	return strings.EqualFold(addr, idx.poolManager)
+}
+
+// isKnownPool reports whether a log address is a V2 pair / V3 pool that the
+// canonical factory created — i.e. one we persisted via handlePairCreated /
+// handlePoolCreated (both gated to the canonical factory). It is the Swap-side
+// half of the AMM trust root: the factory authorizes a pool, and only that pool's
+// Swaps are honored. eth_getLogs returns logs in block+logIndex order, so the
+// PairCreated/PoolCreated (in an earlier or the same block) is always processed
+// before the pool's first Swap. Pairs are seeded lower-cased (topicAddr), so the
+// lookup is case-insensitive.
+func (idx *Indexer) isKnownPool(addr string) bool {
+	p, _ := idx.store.GetPool(nil, strings.ToLower(addr))
+	return p != nil
 }
 
 // shortAddr returns a stable short symbol for an unknown token address.

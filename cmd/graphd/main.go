@@ -92,8 +92,17 @@ func main() {
 	stopReplicate := storage.StartReplicate(filepath.Join(*dataDir, "graph.db"))
 	defer stopReplicate()
 
-	// Indexer: subscribe to EVM events via RPC
-	idx := indexer.New(*rpcEndpoint, store)
+	// Indexer: subscribe to EVM events via RPC. The AMM trust roots (V2/V3
+	// factories) and the 0x9999 settlement manager default to the canonical Lux
+	// mainnet addresses; override per-network (e.g. Zoo) via env. Events from any
+	// other emitter are rejected so they cannot seed phantom pairs/pools/swaps or
+	// inflate the public Factory/TVL/volume aggregates.
+	idx := indexer.NewWithConfig(indexer.Config{
+		RPC:         *rpcEndpoint,
+		FactoryV2:   os.Getenv("FACTORY_V2"),
+		FactoryV3:   os.Getenv("FACTORY_V3"),
+		PoolManager: os.Getenv("POOL_MANAGER"),
+	}, store)
 	go func() {
 		if err := idx.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("indexer", "error", err)
