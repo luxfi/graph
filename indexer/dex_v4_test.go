@@ -90,7 +90,7 @@ func TestHandleSwapV4_WritesAmmSwapOnly(t *testing.T) {
 		TransactionHash: "0xdeadbeef",
 		LogIndex:        "0x0",
 	}
-	idx.processLog(l)
+	idx.processLog(context.Background(), l)
 
 	// AMM swap present with correctly signed legs.
 	sw, err := s.GetSwaps(nil, 10, "timestamp", "desc", nil)
@@ -131,9 +131,9 @@ func TestHandleDEXFill_ScopedToPoolManager(t *testing.T) {
 		}
 	}
 	// Legit fill at 0x9999.
-	idx.processLog(mkFill(LXSettleAddress, "0xaa", 400))
+	idx.processLog(context.Background(), mkFill(LXSettleAddress, "0xaa", 400))
 	// Spoofed fill from a rogue address — must be dropped.
-	idx.processLog(mkFill("0x0000000000000000000000000000000000009998", "0xbb", 999999))
+	idx.processLog(context.Background(), mkFill("0x0000000000000000000000000000000000009998", "0xbb", 999999))
 
 	fills, _ := s.ListByType("Fill", 10)
 	fl := fills.([]interface{})
@@ -173,7 +173,7 @@ func TestHandleInitializeV4_PoolMarketFactory(t *testing.T) {
 	poolID := topic32("d00d")
 	cur0 := "0x0000000000000000000000000000000000000011"
 	cur1 := "0x0000000000000000000000000000000000000022"
-	idx.processLog(initV4Log(poolID, cur0, cur1, 3000, 60, 0, 0, "0x1"))
+	idx.processLog(context.Background(), initV4Log(poolID, cur0, cur1, 3000, 60, 0, 0, "0x1"))
 
 	if p, _ := s.GetPool(nil, poolID); p == nil {
 		t.Fatal("expected pool from InitializeV4")
@@ -209,14 +209,14 @@ func TestHandleInitializeV4_MergesStubVolume(t *testing.T) {
 	poolID := topic32("beef")
 	taker := "0x00000000000000000000000000000000000000aa"
 	// 1) A DEXFill lands first → writeFill creates a Market stub with volume=400.
-	idx.processLog(&logEntry{
+	idx.processLog(context.Background(), &logEntry{
 		Address: LXSettleAddress, Topics: []string{SigDEXFill, poolID, addrTopic(taker)},
 		Data: "0x" + word(big.NewInt(400)) + word(big.NewInt(7)), BlockNumber: "0x5", TransactionHash: "0xaa", LogIndex: "0x0",
 	})
 	// 2) Initialize arrives later → must enrich, not wipe.
 	cur0 := "0x0000000000000000000000000000000000000011"
 	cur1 := "0x0000000000000000000000000000000000000022"
-	idx.processLog(initV4Log(poolID, cur0, cur1, 500, 10, 0, 0, "0x6"))
+	idx.processLog(context.Background(), initV4Log(poolID, cur0, cur1, 500, 10, 0, 0, "0x6"))
 
 	mk, _ := s.GetByType("Market", poolID)
 	mm := mk.(map[string]interface{})
@@ -446,7 +446,7 @@ func TestHandleV4_RejectsNonPoolManager(t *testing.T) {
 		poolID := topic32("1111")
 		spoof := initV4Log(poolID, cur0, cur1, 3000, 60, 0, 0, "0x1")
 		spoof.Address = rogue // same wire shape, wrong emitter
-		idx.processLog(spoof)
+		idx.processLog(context.Background(), spoof)
 
 		if p, _ := s.GetPool(nil, poolID); p != nil {
 			t.Error("rogue Initialize must NOT seed a pool")
@@ -462,7 +462,7 @@ func TestHandleV4_RejectsNonPoolManager(t *testing.T) {
 		}
 
 		// The SAME event from the real 0x9999 IS honored (gate is the emitter, not the shape).
-		idx.processLog(initV4Log(poolID, cur0, cur1, 3000, 60, 0, 0, "0x1"))
+		idx.processLog(context.Background(), initV4Log(poolID, cur0, cur1, 3000, 60, 0, 0, "0x1"))
 		if p, _ := s.GetPool(nil, poolID); p == nil {
 			t.Fatal("canonical 0x9999 Initialize must seed a pool")
 		}
@@ -484,13 +484,13 @@ func TestHandleV4_RejectsNonPoolManager(t *testing.T) {
 				BlockNumber: "0x10", TransactionHash: tx, LogIndex: "0x0",
 			}
 		}
-		idx.processLog(mkSwap(rogue, "0xspoof")) // rogue — dropped
+		idx.processLog(context.Background(), mkSwap(rogue, "0xspoof")) // rogue — dropped
 		sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil)
 		if sw != nil && len(sw.([]interface{})) != 0 {
 			t.Fatalf("rogue Swap must NOT create an AMM swap, got %d", len(sw.([]interface{})))
 		}
 
-		idx.processLog(mkSwap(LXSettleAddress, "0xreal")) // canonical — honored
+		idx.processLog(context.Background(), mkSwap(LXSettleAddress, "0xreal")) // canonical — honored
 		sw, _ = s.GetSwaps(nil, 10, "timestamp", "desc", nil)
 		if sw == nil || len(sw.([]interface{})) != 1 {
 			t.Fatalf("canonical 0x9999 Swap must create exactly 1 AMM swap")
@@ -529,7 +529,7 @@ func TestPoll_MalformedLogDoesNotCrash(t *testing.T) {
 					t.Fatalf("malformed log %d panicked in processLog (must be guarded): %v", i, r)
 				}
 			}()
-			idx.processLog(l)
+			idx.processLog(context.Background(), l)
 		}()
 	}
 
@@ -643,7 +643,7 @@ func TestHandleV2_RejectsNonFactory(t *testing.T) {
 	idx := NewWithConfig(Config{RPC: "http://unused", FactoryV2: testFactoryV2, FactoryV3: testFactoryV3}, s)
 
 	// --- Rogue PairCreated: nothing seeded, factory not inflated. ---
-	idx.processLog(pairCreatedLog(rogue, token0, token1, rt))
+	idx.processLog(context.Background(), pairCreatedLog(rogue, token0, token1, rt))
 	if p, _ := s.GetPool(nil, rt); p != nil {
 		t.Error("rogue PairCreated must NOT seed a pair")
 	}
@@ -655,20 +655,20 @@ func TestHandleV2_RejectsNonFactory(t *testing.T) {
 	}
 
 	// --- A Swap from the rogue (never-registered) pair: no swap recorded. ---
-	idx.processLog(swapV2Log(rt, token0, "0xspoof", 1000, 2500))
+	idx.processLog(context.Background(), swapV2Log(rt, token0, "0xspoof", 1000, 2500))
 	if sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil); sw != nil && len(sw.([]interface{})) != 0 {
 		t.Fatalf("Swap from a rogue V2 pair must NOT be recorded, got %d", len(sw.([]interface{})))
 	}
 
 	// --- Canonical PairCreated IS honored; its pair's Swap IS recorded. ---
-	idx.processLog(pairCreatedLog(testFactoryV2, token0, token1, ct))
+	idx.processLog(context.Background(), pairCreatedLog(testFactoryV2, token0, token1, ct))
 	if p, _ := s.GetPool(nil, ct); p == nil {
 		t.Fatal("canonical PairCreated must seed the pair")
 	}
 	if f, _ := s.GetFactory(nil, "1"); f == nil || asInt64(f.(map[string]interface{})["poolCount"]) != 1 {
 		t.Fatalf("canonical PairCreated must bump factory poolCount to 1, got %v", f)
 	}
-	idx.processLog(swapV2Log(ct, token0, "0xreal", 1000, 2500))
+	idx.processLog(context.Background(), swapV2Log(ct, token0, "0xreal", 1000, 2500))
 	sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil)
 	if sw == nil || len(sw.([]interface{})) != 1 {
 		t.Fatalf("Swap from the canonical V2 pair must be recorded exactly once, got %v", sw)
@@ -686,7 +686,7 @@ func TestHandleV3_RejectsNonFactory(t *testing.T) {
 	idx := NewWithConfig(Config{RPC: "http://unused", FactoryV2: testFactoryV2, FactoryV3: testFactoryV3}, s)
 
 	// --- Rogue PoolCreated: nothing seeded, factory not inflated. ---
-	idx.processLog(poolCreatedLog(rogue, token0, token1, 3000, rt))
+	idx.processLog(context.Background(), poolCreatedLog(rogue, token0, token1, 3000, rt))
 	if p, _ := s.GetPool(nil, rt); p != nil {
 		t.Error("rogue PoolCreated must NOT seed a pool")
 	}
@@ -695,20 +695,20 @@ func TestHandleV3_RejectsNonFactory(t *testing.T) {
 	}
 
 	// --- A Swap from the rogue (never-registered) pool: no swap recorded. ---
-	idx.processLog(swapV3Log(rt, token0, "0xspoof", 1000, -2500))
+	idx.processLog(context.Background(), swapV3Log(rt, token0, "0xspoof", 1000, -2500))
 	if sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil); sw != nil && len(sw.([]interface{})) != 0 {
 		t.Fatalf("Swap from a rogue V3 pool must NOT be recorded, got %d", len(sw.([]interface{})))
 	}
 
 	// --- Canonical PoolCreated IS honored; its pool's Swap IS recorded with signed legs. ---
-	idx.processLog(poolCreatedLog(testFactoryV3, token0, token1, 3000, ct))
+	idx.processLog(context.Background(), poolCreatedLog(testFactoryV3, token0, token1, 3000, ct))
 	if p, _ := s.GetPool(nil, ct); p == nil {
 		t.Fatal("canonical PoolCreated must seed the pool")
 	}
 	if f, _ := s.GetFactory(nil, "1"); f == nil || asInt64(f.(map[string]interface{})["poolCount"]) != 1 {
 		t.Fatalf("canonical PoolCreated must bump factory poolCount to 1, got %v", f)
 	}
-	idx.processLog(swapV3Log(ct, token0, "0xreal", 1000, 2500))
+	idx.processLog(context.Background(), swapV3Log(ct, token0, "0xreal", 1000, 2500))
 	sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil)
 	if sw == nil || len(sw.([]interface{})) != 1 {
 		t.Fatalf("Swap from the canonical V3 pool must be recorded exactly once, got %v", sw)

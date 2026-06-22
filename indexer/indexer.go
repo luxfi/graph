@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/luxfi/graph/storage"
@@ -90,6 +91,12 @@ type Indexer struct {
 	lowHeadStreak int    // consecutive polls observing a head far below the cursor (re-genesis pre-filter)
 	genesisHash   string // chain-identity fingerprint; a change ⇒ true re-genesis (lazily captured)
 	status        Status
+
+	// tokenCache memoises ERC20 metadata (symbol/name/decimals) per token
+	// address for the process lifetime so each token is read from the chain at
+	// most once — never per-block. Keyed lower-cased address → *SeedTokenData.
+	// See erc20.go (tokenMeta/seedToken).
+	tokenCache sync.Map
 
 	// genesisHashFn fetches the chain's genesis (block 0) hash. It is a field so
 	// tests can drive the canonicality decision deterministically without a live
@@ -419,7 +426,7 @@ func (idx *Indexer) poll(ctx context.Context) error {
 
 	// 3. Process each log
 	for i := range logs {
-		idx.processLog(&logs[i])
+		idx.processLog(ctx, &logs[i])
 		idx.status.IndexedEvents++
 	}
 
@@ -434,8 +441,10 @@ func (idx *Indexer) poll(ctx context.Context) error {
 	return nil
 }
 
-// processLog matches a log entry's topic0 and writes to storage.
-func (idx *Indexer) processLog(l *logEntry) {
+// processLog matches a log entry's topic0 and writes to storage. ctx is
+// threaded through so the token-seeding handlers can read ERC20 metadata via
+// eth_call on the same RPC the poll loop already holds a context for.
+func (idx *Indexer) processLog(ctx context.Context, l *logEntry) {
 	if len(l.Topics) == 0 {
 		return
 	}
@@ -450,13 +459,13 @@ func (idx *Indexer) processLog(l *logEntry) {
 	case SigSwapV3:
 		idx.handleSwapV3(l, blockNum, txHash, logIdx)
 	case SigPairCreated:
-		idx.handlePairCreated(l)
+		idx.handlePairCreated(ctx, l)
 	case SigPoolCreated:
-		idx.handlePoolCreated(l)
+		idx.handlePoolCreated(ctx, l)
 	case SigTransfer:
-		idx.handleTransfer(l, txHash, logIdx)
+		idx.handleTransfer(ctx, l, txHash, logIdx)
 	case SigInitializeV4:
-		idx.handleInitializeV4(l)
+		idx.handleInitializeV4(ctx, l)
 	case SigSwapV4:
 		idx.handleSwapV4(l, blockNum, txHash, logIdx)
 	case SigDEXFill:
@@ -614,7 +623,7 @@ func (idx *Indexer) handleSwapV3(l *logEntry, blockNum uint64, txHash, logIdx st
 	})
 }
 
-func (idx *Indexer) handlePairCreated(l *logEntry) {
+func (idx *Indexer) handlePairCreated(ctx context.Context, l *logEntry) {
 	// Scope to the canonical V2 factory (the trust root), exactly as the V4
 	// handlers scope to 0x9999. A PairCreated from any other contract is rejected:
 	// honoring it would let anyone seed phantom pairs/tokens and inflate the
@@ -639,12 +648,12 @@ func (idx *Indexer) handlePairCreated(l *logEntry) {
 		Token1:  token1,
 		FeeTier: 3000,
 	})
-	idx.store.SeedToken(token0, &storage.SeedTokenData{Symbol: shortAddr(token0), Name: token0, Decimals: 18})
-	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: shortAddr(token1), Name: token1, Decimals: 18})
+	idx.seedToken(ctx, token0)
+	idx.seedToken(ctx, token1)
 	idx.bumpFactory(1)
 }
 
-func (idx *Indexer) handlePoolCreated(l *logEntry) {
+func (idx *Indexer) handlePoolCreated(ctx context.Context, l *logEntry) {
 	// Scope to the canonical V3 factory (the trust root), mirroring handlePairCreated
 	// and the V4 0x9999 gate. A PoolCreated from a rogue contract is rejected so it
 	// can neither inflate the Factory/TVL aggregates nor register a rogue pool whose
@@ -670,17 +679,17 @@ func (idx *Indexer) handlePoolCreated(l *logEntry) {
 		Token1:  token1,
 		FeeTier: fee,
 	})
-	idx.store.SeedToken(token0, &storage.SeedTokenData{Symbol: shortAddr(token0), Name: token0, Decimals: 18})
-	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: shortAddr(token1), Name: token1, Decimals: 18})
+	idx.seedToken(ctx, token0)
+	idx.seedToken(ctx, token1)
 	idx.bumpFactory(1)
 }
 
-func (idx *Indexer) handleTransfer(l *logEntry, txHash, logIdx string) {
-	// ERC20 Transfer — just record the token if we see it
+func (idx *Indexer) handleTransfer(ctx context.Context, l *logEntry, txHash, logIdx string) {
+	// ERC20 Transfer — record the token if we see it. seedToken reads the real
+	// symbol/name/decimals from the chain once and caches, so the per-transfer
+	// firing of this handler does NOT translate into per-block RPC.
 	if len(l.Topics) >= 3 {
-		idx.store.SeedToken(l.Address, &storage.SeedTokenData{
-			Symbol: shortAddr(l.Address), Name: l.Address, Decimals: 18,
-		})
+		idx.seedToken(ctx, l.Address)
 	}
 }
 
@@ -758,7 +767,7 @@ func asInt64(v interface{}) int64 {
 // pool id is the indexed bytes32 `id`; token0/token1 are the indexed
 // currency0/currency1. Fee is the first data word. Pools created by the 0x9999
 // settlement manager are ALSO surfaced as DEX (CLOB) Market entities.
-func (idx *Indexer) handleInitializeV4(l *logEntry) {
+func (idx *Indexer) handleInitializeV4(ctx context.Context, l *logEntry) {
 	// Scope to the canonical settlement manager (0x9999), exactly like
 	// handleDEXFill. Any contract can emit a lookalike Initialize; honoring them
 	// would let anyone seed phantom pools/tokens and inflate the explorer's public
@@ -776,8 +785,8 @@ func (idx *Indexer) handleInitializeV4(l *logEntry) {
 		Token1:  token1,
 		FeeTier: fee,
 	})
-	idx.store.SeedToken(token0, &storage.SeedTokenData{Symbol: shortAddr(token0), Name: token0, Decimals: 18})
-	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: shortAddr(token1), Name: token1, Decimals: 18})
+	idx.seedToken(ctx, token0)
+	idx.seedToken(ctx, token1)
 	idx.bumpFactory(1)
 
 	// We only reach here for the 0x9999 PoolManager (gated above), so every
@@ -895,10 +904,118 @@ func (idx *Indexer) isKnownPool(addr string) bool {
 	return p != nil
 }
 
-// shortAddr returns a stable short symbol for an unknown token address.
+// shortAddr returns a stable short symbol for an unknown token address. It is
+// the fallback when the chain has no ERC20 symbol()/name() to offer (a revert,
+// a non-compliant contract, or an unreachable RPC) — see readERC20.
 func shortAddr(addr string) string {
 	if len(addr) >= 8 {
 		return addr[:8]
 	}
 	return addr
+}
+
+// seedToken records a Token entity with ERC20 metadata read from the chain.
+// It is the ONE place every pool/pair/transfer handler routes token writes
+// through; it owns both the read-once cache (tokenMeta) and the persistence,
+// so the four handlers stay in their lane and never duplicate enrichment.
+//
+// Cold-start clobber guard: SeedToken is INSERT OR REPLACE, and the in-memory
+// cache is empty after a restart. If a token was already enriched in a prior
+// run (its stored symbol differs from the address placeholder), the cheap
+// metadata read might transiently fail (RPC blip) and we must NOT overwrite a
+// good stored name with the address fallback. So on a cache miss we consult the
+// store: an already-enriched row short-circuits the read entirely, and a freshly
+// read placeholder never downgrades an existing real symbol.
+func (idx *Indexer) seedToken(ctx context.Context, addr string) {
+	key := strings.ToLower(addr)
+	// Already settled this process (resolved metadata or a cached placeholder):
+	// the value is in the store from the first sight, so the hot Transfer path
+	// costs zero RPC AND zero DB writes on every subsequent block.
+	if _, cached := idx.tokenCache.Load(key); cached {
+		return
+	}
+	// First sight this process. If the store already holds a real (non-placeholder)
+	// symbol from a previous run, adopt it as the cached value and skip the RPC —
+	// the chain metadata is immutable, so a re-read would only cost RPC and risk a
+	// blip-induced downgrade.
+	if existing := idx.storedToken(addr); existing != nil && !isPlaceholderSymbol(existing.Symbol, addr) {
+		idx.tokenCache.Store(key, existing)
+		return
+	}
+	meta := idx.tokenMeta(ctx, addr)
+	idx.store.SeedToken(addr, meta)
+}
+
+// BackfillTokens enriches Token rows that were persisted with the address
+// placeholder (symbol == shortAddr(addr)) by an earlier build that did not read
+// ERC20 metadata. It is the cheap, idempotent alternative to a full re-sync:
+// it issues at most three eth_calls per *placeholder* token (already-enriched
+// rows are skipped) and rewrites only those rows — no block re-scan, no cursor
+// rewind, no effect on swaps/pools/factory aggregates.
+//
+// Safe to call at startup before Run, or as a one-shot maintenance pass. Returns
+// the number of tokens enriched. Honors ctx cancellation between tokens.
+func (idx *Indexer) BackfillTokens(ctx context.Context) (int, error) {
+	const pageSize = 1 << 20 // GetTokens caps internally; this asks for "all"
+	raw, err := idx.store.GetTokens(ctx, pageSize, "", "", nil)
+	if err != nil {
+		return 0, err
+	}
+	rows, ok := raw.([]interface{})
+	if !ok {
+		return 0, nil
+	}
+	enriched := 0
+	for _, r := range rows {
+		if ctx.Err() != nil {
+			return enriched, ctx.Err()
+		}
+		m, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		addr, _ := m["id"].(string)
+		symbol, _ := m["symbol"].(string)
+		if addr == "" || !isPlaceholderSymbol(symbol, addr) {
+			continue // already has a real symbol — nothing to do
+		}
+		before := symbol
+		idx.seedToken(ctx, addr)
+		// Count only rows that actually changed (the read may have reverted and
+		// kept the placeholder — that token is now cached and won't be retried).
+		if after := idx.storedToken(addr); after != nil && !isPlaceholderSymbol(after.Symbol, addr) && after.Symbol != before {
+			enriched++
+		}
+	}
+	log.Printf("[indexer] token backfill complete — %d/%d enriched", enriched, len(rows))
+	return enriched, nil
+}
+
+// storedToken loads a token's persisted metadata, or nil if absent. Used only
+// by the cold-start guard in seedToken.
+func (idx *Indexer) storedToken(addr string) *storage.SeedTokenData {
+	t, err := idx.store.GetToken(nil, addr)
+	if err != nil || t == nil {
+		return nil
+	}
+	m, ok := t.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	out := &storage.SeedTokenData{Decimals: defaultDecimals}
+	if s, ok := m["symbol"].(string); ok {
+		out.Symbol = s
+	}
+	if s, ok := m["name"].(string); ok {
+		out.Name = s
+	}
+	out.Decimals = asInt64(m["decimals"])
+	return out
+}
+
+// isPlaceholderSymbol reports whether a stored symbol is the address-derived
+// fallback (shortAddr) rather than a real ERC20 symbol — i.e. a row that still
+// needs enriching.
+func isPlaceholderSymbol(symbol, addr string) bool {
+	return symbol == "" || strings.EqualFold(symbol, shortAddr(addr))
 }
