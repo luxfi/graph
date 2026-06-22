@@ -245,11 +245,24 @@ func (idx *Indexer) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := idx.poll(ctx); err != nil {
+			if err := idx.pollGuarded(ctx); err != nil {
 				log.Printf("[indexer] poll error: %v", err)
 			}
 		}
 	}
+}
+
+// pollGuarded runs one poll, converting any panic (e.g. a malformed RPC log that
+// slips a length check) into an error so a single bad log cannot crash the whole
+// graphd process — the loop logs it and continues on the next tick. This is the
+// process-survival backstop; individual handlers still length-check their inputs.
+func (idx *Indexer) pollGuarded(ctx context.Context) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("poll panic recovered: %v", r)
+		}
+	}()
+	return idx.poll(ctx)
 }
 
 // rpcCall makes a JSON-RPC POST and returns the result field.
@@ -583,8 +596,8 @@ func (idx *Indexer) handlePairCreated(l *logEntry) {
 		Token1:  token1,
 		FeeTier: 3000,
 	})
-	idx.store.SeedToken(token0, &storage.SeedTokenData{Symbol: token0[:8], Name: token0, Decimals: 18})
-	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: token1[:8], Name: token1, Decimals: 18})
+	idx.store.SeedToken(token0, &storage.SeedTokenData{Symbol: shortAddr(token0), Name: token0, Decimals: 18})
+	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: shortAddr(token1), Name: token1, Decimals: 18})
 	idx.bumpFactory(1)
 }
 
@@ -609,8 +622,8 @@ func (idx *Indexer) handlePoolCreated(l *logEntry) {
 		Token1:  token1,
 		FeeTier: fee,
 	})
-	idx.store.SeedToken(token0, &storage.SeedTokenData{Symbol: token0[:8], Name: token0, Decimals: 18})
-	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: token1[:8], Name: token1, Decimals: 18})
+	idx.store.SeedToken(token0, &storage.SeedTokenData{Symbol: shortAddr(token0), Name: token0, Decimals: 18})
+	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: shortAddr(token1), Name: token1, Decimals: 18})
 	idx.bumpFactory(1)
 }
 
@@ -618,7 +631,7 @@ func (idx *Indexer) handleTransfer(l *logEntry, txHash, logIdx string) {
 	// ERC20 Transfer — just record the token if we see it
 	if len(l.Topics) >= 3 {
 		idx.store.SeedToken(l.Address, &storage.SeedTokenData{
-			Symbol: l.Address[:8], Name: l.Address, Decimals: 18,
+			Symbol: shortAddr(l.Address), Name: l.Address, Decimals: 18,
 		})
 	}
 }
@@ -698,7 +711,11 @@ func asInt64(v interface{}) int64 {
 // currency0/currency1. Fee is the first data word. Pools created by the 0x9999
 // settlement manager are ALSO surfaced as DEX (CLOB) Market entities.
 func (idx *Indexer) handleInitializeV4(l *logEntry) {
-	if len(l.Topics) < 4 {
+	// Scope to the canonical settlement manager (0x9999), exactly like
+	// handleDEXFill. Any contract can emit a lookalike Initialize; honoring them
+	// would let anyone seed phantom pools/tokens and inflate the explorer's public
+	// TVL/volume aggregates. Only the real PoolManager's Initialize is authoritative.
+	if len(l.Topics) < 4 || !idx.isPoolManager(l.Address) {
 		return
 	}
 	poolID := l.Topics[1] // full 32-byte id
@@ -715,36 +732,37 @@ func (idx *Indexer) handleInitializeV4(l *logEntry) {
 	idx.store.SeedToken(token1, &storage.SeedTokenData{Symbol: shortAddr(token1), Name: token1, Decimals: 18})
 	idx.bumpFactory(1)
 
-	if idx.isPoolManager(l.Address) {
-		// MERGE with any stub a prior fill already accumulated (writeFill creates a
-		// volume24h/tradeCount stub when a Fill arrives before its Initialize). The
-		// Initialize supplies the RICH fields (token pair, fee tier); it must NOT
-		// reset the accumulated trade aggregates to zero. Defaults apply only when
-		// the field is absent (no prior stub).
-		mk := map[string]interface{}{
-			"id": poolID, "symbol": poolID, "baseToken": token0, "quoteToken": token1,
-			"feeTier": fee, "volume24h": "0", "tradeCount": int64(0), "lastPrice": "0",
-		}
-		if existing, _ := idx.store.GetByType("Market", poolID); existing != nil {
-			if em, ok := existing.(map[string]interface{}); ok {
-				for _, k := range []string{"volume24h", "tradeCount", "lastPrice", "lastUpdate"} {
-					if v, present := em[k]; present {
-						mk[k] = v
-					}
+	// We only reach here for the 0x9999 PoolManager (gated above), so every
+	// Initialize is also a DEX (CLOB) Market. MERGE with any stub a prior fill
+	// already accumulated (writeFill creates a volume24h/tradeCount stub when a Fill
+	// arrives before its Initialize). The Initialize supplies the RICH fields (token
+	// pair, fee tier); it must NOT reset the accumulated trade aggregates to zero.
+	// Defaults apply only when the field is absent (no prior stub).
+	mk := map[string]interface{}{
+		"id": poolID, "symbol": poolID, "baseToken": token0, "quoteToken": token1,
+		"feeTier": fee, "volume24h": "0", "tradeCount": int64(0), "lastPrice": "0",
+	}
+	if existing, _ := idx.store.GetByType("Market", poolID); existing != nil {
+		if em, ok := existing.(map[string]interface{}); ok {
+			for _, k := range []string{"volume24h", "tradeCount", "lastPrice", "lastUpdate"} {
+				if v, present := em[k]; present {
+					mk[k] = v
 				}
 			}
 		}
-		idx.store.SetEntity("Market", poolID, mk)
 	}
+	idx.store.SetEntity("Market", poolID, mk)
 }
 
-// handleSwapV4 records a V4 swap (Swap at any V4 PoolManager) as an AMM swap —
+// handleSwapV4 records a V4 swap (Swap at the 0x9999 PoolManager) as an AMM swap —
 // amount0/amount1 are signed int128. This is the AMM-side view only. The DEX
 // (CLOB) Fill is NOT derived here: a settled native fill is recorded from its
 // own authoritative DEXFill event (handleDEXFill), so the Fill has exactly one
-// source. A vanilla (non-0x9999) V4 pool emits only this AMM swap, never a fill.
+// source. Scoped to the canonical PoolManager (like handleInitializeV4 /
+// handleDEXFill): a lookalike Swap from any other contract would otherwise inject
+// phantom swaps and inflate the explorer's public volume aggregate.
 func (idx *Indexer) handleSwapV4(l *logEntry, blockNum uint64, txHash, logIdx string) {
-	if len(l.Topics) < 3 {
+	if len(l.Topics) < 3 || !idx.isPoolManager(l.Address) {
 		return
 	}
 	id := fmt.Sprintf("%s#%s", txHash, logIdx)
