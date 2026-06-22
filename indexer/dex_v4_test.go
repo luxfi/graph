@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/luxfi/graph/storage"
@@ -422,5 +425,136 @@ func TestPoll_RegenesisProbeFailsNoWipe(t *testing.T) {
 	}
 	if idx.lastBlock != 5_000_000 {
 		t.Fatalf("probe failure must not wipe; lastBlock=%d", idx.lastBlock)
+	}
+}
+
+// MEDIUM: AMM V4 Initialize/Swap MUST be scoped to the canonical 0x9999
+// PoolManager. A lookalike Initialize/Swap emitted by any OTHER contract must be
+// rejected — otherwise anyone can seed phantom pools/tokens/swaps and inflate the
+// explorer's public TVL/volume aggregates. (handleDEXFill is already so scoped;
+// this proves Initialize and Swap now mirror it.)
+func TestHandleV4_RejectsNonPoolManager(t *testing.T) {
+	const rogue = "0x000000000000000000000000000000000000dEaD"
+	cur0 := "0x0000000000000000000000000000000000000011"
+	cur1 := "0x0000000000000000000000000000000000000022"
+
+	// --- Initialize from a rogue contract: nothing seeded. ---
+	t.Run("Initialize", func(t *testing.T) {
+		s := newMemSQLiteStore(t)
+		idx := NewWithConfig(Config{RPC: "http://unused"}, s) // default 0x9999
+
+		poolID := topic32("1111")
+		spoof := initV4Log(poolID, cur0, cur1, 3000, 60, 0, 0, "0x1")
+		spoof.Address = rogue // same wire shape, wrong emitter
+		idx.processLog(spoof)
+
+		if p, _ := s.GetPool(nil, poolID); p != nil {
+			t.Error("rogue Initialize must NOT seed a pool")
+		}
+		if tok, _ := s.GetByType("Token", cur0); tok != nil {
+			t.Error("rogue Initialize must NOT seed a token")
+		}
+		if mk, _ := s.GetByType("Market", poolID); mk != nil {
+			t.Error("rogue Initialize must NOT seed a DEX Market")
+		}
+		if f, _ := s.GetFactory(nil, "1"); f != nil && asInt64(f.(map[string]interface{})["poolCount"]) != 0 {
+			t.Errorf("rogue Initialize must NOT inflate factory poolCount, got %v", f)
+		}
+
+		// The SAME event from the real 0x9999 IS honored (gate is the emitter, not the shape).
+		idx.processLog(initV4Log(poolID, cur0, cur1, 3000, 60, 0, 0, "0x1"))
+		if p, _ := s.GetPool(nil, poolID); p == nil {
+			t.Fatal("canonical 0x9999 Initialize must seed a pool")
+		}
+	})
+
+	// --- Swap from a rogue contract: no AMM swap, no volume. ---
+	t.Run("Swap", func(t *testing.T) {
+		s := newMemSQLiteStore(t)
+		idx := NewWithConfig(Config{RPC: "http://unused"}, s)
+
+		poolID := topic32("2222")
+		taker := "0x00000000000000000000000000000000000000aa"
+		mkSwap := func(addr, tx string) *logEntry {
+			return &logEntry{
+				Address: addr,
+				Topics:  []string{SigSwapV4, poolID, addrTopic(taker)},
+				Data: "0x" + signedWord(big.NewInt(1000)) + signedWord(big.NewInt(-2500)) +
+					word(new(big.Int)) + word(new(big.Int)) + word(new(big.Int)) + word(big.NewInt(3000)),
+				BlockNumber: "0x10", TransactionHash: tx, LogIndex: "0x0",
+			}
+		}
+		idx.processLog(mkSwap(rogue, "0xspoof")) // rogue — dropped
+		sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil)
+		if sw != nil && len(sw.([]interface{})) != 0 {
+			t.Fatalf("rogue Swap must NOT create an AMM swap, got %d", len(sw.([]interface{})))
+		}
+
+		idx.processLog(mkSwap(LXSettleAddress, "0xreal")) // canonical — honored
+		sw, _ = s.GetSwaps(nil, 10, "timestamp", "desc", nil)
+		if sw == nil || len(sw.([]interface{})) != 1 {
+			t.Fatalf("canonical 0x9999 Swap must create exactly 1 AMM swap")
+		}
+	})
+}
+
+// LOW (DoS): a malformed RPC log (short/empty topics, truncated hex) must NOT
+// crash the poll goroutine. processLog handlers length-check, and pollGuarded's
+// recover() is the process-survival backstop. We assert (a) malformed logs are
+// processed without panic, and (b) pollGuarded turns any panic into an error
+// rather than tearing down the process.
+func TestPoll_MalformedLogDoesNotCrash(t *testing.T) {
+	s := newMemSQLiteStore(t)
+	idx := NewWithConfig(Config{RPC: "http://unused"}, s)
+
+	// Each of these previously risked a slice-out-of-range panic via an unguarded
+	// fixed-offset slice on a short field. None may panic now.
+	malformed := []*logEntry{
+		// PairCreated with a too-short data word.
+		{Address: "0xab", Topics: []string{SigPairCreated, topic32("1"), topic32("2")}, Data: "0x1234"},
+		// PoolCreated whose currency topics are themselves short.
+		{Address: "0xab", Topics: []string{SigPoolCreated, "0x12", "0x34", "0x1f"}, Data: "0x" + word(big.NewInt(1))},
+		// Transfer from a 2-char address (l.Address[:8] used to panic here).
+		{Address: "0xa", Topics: []string{SigTransfer, topic32("1"), topic32("2")}, Data: "0x"},
+		// InitializeV4 / SwapV4 at 0x9999 with truncated currency topics.
+		{Address: LXSettleAddress, Topics: []string{SigInitializeV4, topic32("3"), "0x1", "0x2"}, Data: "0x"},
+		{Address: LXSettleAddress, Topics: []string{SigSwapV4, topic32("4"), "0x9"}, Data: "0x", BlockNumber: "0x1", LogIndex: "0x0"},
+		// Empty topics (topic0 access guard).
+		{Address: "0xab", Topics: []string{}},
+	}
+	for i, l := range malformed {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("malformed log %d panicked in processLog (must be guarded): %v", i, r)
+				}
+			}()
+			idx.processLog(l)
+		}()
+	}
+
+	// pollGuarded backstop: a panic raised deep inside a real poll (here, from the
+	// genesis-hash probe) must be RECOVERED into an error, never propagate and crash
+	// the process. We point the indexer at a live in-process RPC so poll runs through
+	// eth_blockNumber and reaches maybeResetForRegenesis, where the probe panics.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Report a head far below the cursor so the re-genesis pre-filter advances to
+		// the (panicking) genesis probe.
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x1"}`)
+	}))
+	defer srv.Close()
+
+	pidx := NewWithConfig(Config{RPC: srv.URL, StartBlock: 0}, newMemSQLiteStore(t))
+	pidx.lastBlock = 5_000_000
+	pidx.genesisHash = "0xbaseline"
+	pidx.lowHeadStreak = regenesisConfirmations - 1 // the next poll's probe fires
+	pidx.genesisHashFn = func(context.Context) (string, error) { panic("boom from a bad RPC backend") }
+
+	perr := pidx.pollGuarded(context.Background())
+	if perr == nil {
+		t.Fatal("pollGuarded must return an error when poll panics, not crash the process")
+	}
+	if !strings.Contains(perr.Error(), "panic recovered") {
+		t.Fatalf("pollGuarded error must identify the recovered panic, got %v", perr)
 	}
 }
