@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/hanzoai/sqlite"
 )
 
 // Store is the unified storage backend backed by SQLite WAL.
@@ -29,7 +29,7 @@ func New(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("storage: mkdir %s: %w", dataDir, err)
 	}
 	dbPath := filepath.Join(dataDir, "graph.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-64000")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-64000")
 	if err != nil {
 		return nil, fmt.Errorf("storage: open %s: %w", dbPath, err)
 	}
