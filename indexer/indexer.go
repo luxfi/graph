@@ -51,7 +51,7 @@ type Config struct {
 	StartBlock uint64
 	// DexRPC, when non-empty, is the native D-Chain (dexvm) CLOB read-RPC root —
 	// e.g. http://node:9650/ext/bc/D/dex. Setting it runs an ADDITIONAL, orthogonal
-	// CLOBSource (clob.go) that polls clob_get_{markets,trades,orders} and writes
+	// CLOBSource (clob.go) that polls dex_get_{markets,trades,orders} and writes
 	// the same Market/Fill/Order entities the EVM 0x9999 path writes. This is the
 	// native trading source: a D-Chain trade is a consensus state transition, not an
 	// EVM log, so it never appears on the EVM RPC. Empty => EVM-only (unchanged).
