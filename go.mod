@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/hanzoai/replicate v0.6.0
 	github.com/luxfi/age v1.4.0
-	github.com/mattn/go-sqlite3 v2.0.3+incompatible
+	github.com/mattn/go-sqlite3 v1.14.47
 	gopkg.in/yaml.v3 v3.0.1
 )
 
