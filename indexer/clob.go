@@ -4,7 +4,7 @@
 // on an EVM chain (C-Chain). That is the cross-chain SETTLEMENT view. The native
 // trading engine, however, IS the D-Chain (dexvm): a trade is a consensus state
 // transition matched at Block.Verify, not an EVM event. Its committed state is
-// served by the read RPC at /ext/bc/D/dex/clob_get_{markets,trades,orders,book}
+// served by the read RPC at /ext/bc/D/dex/dex_get_{markets,trades,orders,book}
 // (GET, self-describing JSON; see luxfi/dex pkg/dchain/read.go). Nothing on the
 // EVM side carries those fills, so without this source the dex subgraph stays
 // empty on a native-DEX deployment.
@@ -44,7 +44,7 @@ import (
 // hammering the node. Matches the EVM poller's cadence.
 const clobPollInterval = 3 * time.Second
 
-// clobTradePage bounds one incremental clob_get_trades response. The trade log is
+// clobTradePage bounds one incremental dex_get_trades response. The trade log is
 // paged by accepted height via the `since` cursor, so this only caps a single
 // catch-up batch — a long history is drained across successive polls.
 const clobTradePage = 1000
@@ -54,7 +54,7 @@ const clobTradePage = 1000
 // trade cursor and writes Market/Fill/Order entities the dex resolvers read.
 type CLOBSource struct {
 	// base is the D-Chain read-RPC root, e.g.
-	// http://node:9650/ext/bc/D/dex  (clob_get_* are appended as /<method>).
+	// http://node:9650/ext/bc/D/dex  (dex_get_* are appended as /<method>).
 	// Trailing "/" is trimmed on construction so joins are unambiguous.
 	base   string
 	store  *storage.Store
@@ -196,10 +196,10 @@ type clobOrdersResp struct {
 
 // ── reads ─────────────────────────────────────────────────────────────────────
 
-// fetchMarkets reads clob_get_markets (every market + its book summary + head).
+// fetchMarkets reads dex_get_markets (every market + its book summary + head).
 func (c *CLOBSource) fetchMarkets(ctx context.Context) ([]clobMarket, clobHead, error) {
 	var resp clobMarketsResp
-	if err := c.get(ctx, "clob_get_markets", nil, &resp); err != nil {
+	if err := c.get(ctx, "dex_get_markets", nil, &resp); err != nil {
 		return nil, clobHead{}, err
 	}
 	return resp.Markets, resp.clobHead, nil
@@ -220,7 +220,7 @@ func (c *CLOBSource) drainTrades(ctx context.Context) error {
 			"since": strconv.FormatUint(since, 10),
 			"limit": strconv.Itoa(clobTradePage),
 		}
-		if err := c.get(ctx, "clob_get_trades", params, &resp); err != nil {
+		if err := c.get(ctx, "dex_get_trades", params, &resp); err != nil {
 			return err
 		}
 		if len(resp.Trades) == 0 {
@@ -250,12 +250,12 @@ func (c *CLOBSource) drainTrades(ctx context.Context) error {
 	}
 }
 
-// refreshOrders reads a market's resting book (clob_get_orders) and overwrites the
+// refreshOrders reads a market's resting book (dex_get_orders) and overwrites the
 // market's Order entities. The order id is namespaced by poolID so two markets'
 // order ids (which restart per market) never collide in the shared entity table.
 func (c *CLOBSource) refreshOrders(ctx context.Context, poolID string) error {
 	var resp clobOrdersResp
-	if err := c.get(ctx, "clob_get_orders", map[string]string{"market": poolID}, &resp); err != nil {
+	if err := c.get(ctx, "dex_get_orders", map[string]string{"market": poolID}, &resp); err != nil {
 		return err
 	}
 	for i := range resp.Orders {
@@ -306,14 +306,14 @@ func (c *CLOBSource) writeMarket(m *clobMarket) {
 // maker/taker order ids give the FE a complete trade-history row.
 //
 // SCOPE — no per-market attribution here: the 80-byte on-chain trade row carries
-// NO poolID (it is the frozen GPU ABI), so clob_get_trades is a GLOBAL,
+// NO poolID (it is the frozen GPU ABI), so dex_get_trades is a GLOBAL,
 // height-ordered log. Attributing a historical fill to a market by its order id is
 // not reliable (a fully-filled order leaves the book, so the current
-// clob_get_orders set cannot map every past fill back). Rather than FABRICATE a
+// dex_get_orders set cannot map every past fill back). Rather than FABRICATE a
 // per-market volume by mis-attributing the global log, the truthful split is:
 // Fill entities are the global trade feed (the trade-history view), and every
 // PER-MARKET figure the FE shows (open orders, depth, best bid/ask, remaining) is
-// taken from clob_get_markets' authoritative per-market book summary in
+// taken from dex_get_markets' authoritative per-market book summary in
 // writeMarket. This keeps both views correct without inventing data the chain
 // does not expose.
 func (c *CLOBSource) writeTrade(t *clobTrade) {

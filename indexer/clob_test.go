@@ -36,9 +36,9 @@ func (s *clobStub) server(t *testing.T) *httptest.Server {
 		s.hits[method]++
 		w.Header().Set("Content-Type", "application/json")
 		switch method {
-		case "clob_get_markets":
+		case "dex_get_markets":
 			fmt.Fprint(w, s.marketsBody)
-		case "clob_get_trades":
+		case "dex_get_trades":
 			var since uint64
 			fmt.Sscanf(r.URL.Query().Get("since"), "%d", &since)
 			rows := make([]string, 0, len(s.trades))
@@ -52,7 +52,7 @@ func (s *clobStub) server(t *testing.T) *httptest.Server {
 			}
 			fmt.Fprintf(w, `{"height":209,"lastAccepted":"abc","root":"deadbeef","count":%d,"trades":[%s]}`,
 				len(rows), strings.Join(rows, ","))
-		case "clob_get_orders":
+		case "dex_get_orders":
 			m := r.URL.Query().Get("market")
 			if body, ok := s.ordersBody[m]; ok {
 				fmt.Fprint(w, body)
@@ -67,7 +67,7 @@ func (s *clobStub) server(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// liveMarketsBody is the clob_get_markets body captured from lux-devnet luxd-0:
+// liveMarketsBody is the dex_get_markets body captured from lux-devnet luxd-0:
 // one unbound pool, two bound markets (LUX/LETH, LUX/LUSD) whose hex symbols
 // decode to human pair names.
 const liveMarketsBody = `{"height":209,"lastAccepted":"YtNQ","root":"dba7","count":3,"markets":[` +
