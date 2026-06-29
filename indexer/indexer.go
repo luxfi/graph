@@ -815,6 +815,21 @@ func (idx *Indexer) handleInitializeV4(ctx context.Context, l *logEntry) {
 	idx.seedToken(ctx, token1)
 	idx.bumpFactory(1)
 
+	// A bound market carries a human BASE/QUOTE symbol (not the raw poolId) when
+	// BOTH currencies resolve to a clean ERC20 symbol. `assetsBound` marks the
+	// market as backed by two identified real assets. This is the ONE place the
+	// market's display identity is computed, so every downstream surface — the
+	// explorer /dex tab, the exchange-api real-asset gate (dexMarkets.ts requires
+	// assetsBound + a clean pair symbol), and the FE — reads one complete value.
+	// A token we cannot cleanly name yields no pair → the market stays unbound and
+	// the public surface hides it rather than showing a junk hex symbol.
+	symbol := poolID
+	assetsBound := false
+	if s0, s1 := idx.pairSide(ctx, token0), idx.pairSide(ctx, token1); s0 != "" && s1 != "" {
+		symbol = s0 + "/" + s1
+		assetsBound = true
+	}
+
 	// We only reach here for the 0x9999 PoolManager (gated above), so every
 	// Initialize is also a DEX (CLOB) Market. MERGE with any stub a prior fill
 	// already accumulated (writeFill creates a volume24h/tradeCount stub when a Fill
@@ -822,7 +837,8 @@ func (idx *Indexer) handleInitializeV4(ctx context.Context, l *logEntry) {
 	// pair, fee tier); it must NOT reset the accumulated trade aggregates to zero.
 	// Defaults apply only when the field is absent (no prior stub).
 	mk := map[string]interface{}{
-		"id": poolID, "symbol": poolID, "baseToken": token0, "quoteToken": token1,
+		"id": poolID, "symbol": symbol, "assetsBound": assetsBound,
+		"baseToken": token0, "quoteToken": token1,
 		"feeTier": fee, "volume24h": "0", "tradeCount": int64(0), "lastPrice": "0",
 	}
 	if existing, _ := idx.store.GetByType("Market", poolID); existing != nil {
@@ -835,6 +851,31 @@ func (idx *Indexer) handleInitializeV4(ctx context.Context, l *logEntry) {
 		}
 	}
 	idx.store.SetEntity("Market", poolID, mk)
+}
+
+// pairSide returns the clean, uppercase symbol for one side of a market pair, or
+// "" if the token has no identifiable ERC20 symbol. A side is clean iff it is a
+// real, non-placeholder symbol reduced to [A-Z0-9] of length 2–12 — the exact
+// shape the exchange-api gate (dexMarkets.ts PAIR_SYMBOL) admits. A token whose
+// symbol() reverts (placeholder = short address) yields "" so its market stays
+// unbound and hidden, never surfaced with a junk symbol. The metadata is the same
+// read-once-cached value seedToken already fetched, so this adds no RPC.
+func (idx *Indexer) pairSide(ctx context.Context, addr string) string {
+	meta := idx.tokenMeta(ctx, addr)
+	if meta == nil || isPlaceholderSymbol(meta.Symbol, addr) {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range strings.ToUpper(meta.Symbol) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	s := b.String()
+	if len(s) < 2 || len(s) > 12 {
+		return ""
+	}
+	return s
 }
 
 // handleSwapV4 records a V4 swap (Swap at the 0x9999 PoolManager) as an AMM swap —
