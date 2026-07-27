@@ -260,7 +260,7 @@ func TestHandleSwapV3_DecodesSignedAmounts(t *testing.T) {
 	// amount0 = +1000 in, amount1 = -2500 out.
 	idx.processLog(context.Background(), swapV3Log(pool, token0, "0xreal", 1000, -2500))
 
-	raw := s.SwapsRaw()
+	raw := s.RecentSwapsRaw(1000)
 	if len(raw) != 1 {
 		t.Fatalf("expected exactly one swap, got %d", len(raw))
 	}
@@ -304,7 +304,7 @@ func TestRevalue_DoesNotRewriteSwapRows(t *testing.T) {
 		t.Errorf("pool volumeUSD = %q, want 12.51", got)
 	}
 	// The swap row itself is untouched — valuing must not write O(swaps) rows.
-	for _, sw := range s.SwapsRaw() {
+	for _, sw := range s.RecentSwapsRaw(1000) {
 		if sw.AmountUSD != "0" {
 			t.Errorf("valuation must not rewrite swap rows; amountUSD became %q", sw.AmountUSD)
 		}
