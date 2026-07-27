@@ -82,6 +82,12 @@ type valuedPool struct {
 	held0, held1 bool    // whether the balance read succeeded
 }
 
+// valuationBudget bounds one pass. A pass that cannot finish inside it is
+// cancelled and says so. Nothing here may run unboundedly: this loop shares a
+// process with six other chains' indexers, and a pass that quietly never
+// returns looks exactly like a pass that was never started.
+const valuationBudget = 60 * time.Second
+
 // runValuation drives the valuation pass on its own ticker until ctx ends. It
 // is started by Run alongside the log poller: orthogonal concerns, one store.
 func (idx *Indexer) runValuation(ctx context.Context) {
@@ -100,24 +106,43 @@ func (idx *Indexer) runValuation(ctx context.Context) {
 	}
 }
 
+// logf prefixes a message with the indexer's label so a multi-chain process can
+// tell whose pass emitted it. An unlabeled indexer (a test, a single-chain
+// binary) prints the bare message.
+func (idx *Indexer) logf(format string, args ...interface{}) {
+	if idx.label == "" {
+		log.Printf(format, args...)
+		return
+	}
+	log.Printf("["+idx.label+"] "+format, args...)
+}
+
 // revalue recomputes every derived USD aggregate from on-chain balances and
 // writes them back. Read-modify-write throughout: this pass owns the USD and
 // price fields and must preserve everything the log handlers own.
-func (idx *Indexer) revalue(ctx context.Context) {
+//
+// Every exit is logged. A pass that reports nothing is indistinguishable from
+// one that was never scheduled, and that ambiguity costs more to debug than the
+// log lines cost to emit.
+func (idx *Indexer) revalue(parent context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[valuation] recovered: %v", r)
+			idx.logf("[valuation] recovered: %v", r)
 		}
 	}()
+	ctx, cancel := context.WithTimeout(parent, valuationBudget)
+	defer cancel()
+	started := time.Now()
 
 	pools := idx.store.PoolsRaw()
 	if len(pools) == 0 {
-		return
+		return // nothing indexed yet for this subgraph; silence is correct here
 	}
 	tokens := idx.store.TokensRaw()
 
 	vps := idx.readBalances(ctx, pools, tokens)
 	if len(vps) == 0 {
+		idx.logf("[valuation] %d pools but no balances read — skipping (aggregates left as-is)", len(pools))
 		return
 	}
 	prices := priceTokens(vps, tokens)
@@ -200,8 +225,9 @@ func (idx *Indexer) revalue(ctx context.Context) {
 		TotalVolumeUSD:      fmtUSD(totalVol),
 	})
 
-	log.Printf("[valuation] %d pools, %d tokens priced — TVL $%s, volume $%s",
-		len(vps), len(prices), fmtUSD(totalTVL), fmtUSD(totalVol))
+	idx.logf("[valuation] %d/%d pools valued, %d tokens priced — TVL $%s, volume $%s (%s)",
+		len(vps), len(pools), len(prices), fmtUSD(totalTVL), fmtUSD(totalVol),
+		time.Since(started).Round(time.Millisecond))
 }
 
 // readBalances asks each pool's two tokens what the pool holds. One eth_call
@@ -316,9 +342,15 @@ func priceTokens(vps []valuedPool, tokens map[string]*storage.SeedTokenData) map
 }
 
 // valueSwaps prices the stored swap history and returns per-pool volume,
-// accumulating per-token volume into tokenVol. A swap whose USD value changed
-// is written back so the trade history carries the same number the aggregates
-// were built from — one valuation, used everywhere.
+// accumulating per-token volume into tokenVol.
+//
+// It READS the swap rows and writes nothing. An earlier cut also wrote each
+// swap's own amountUSD back, which turned one pass into O(swaps) serialized
+// INSERT OR REPLACEs every interval — on a chain with a real trade history the
+// pass never finished, so its chain silently produced no aggregates at all
+// while a quiet chain beside it looked fine. Volume is a per-pool rollup; it
+// belongs on the pool. (Per-swap amountUSD remains "0" — a separate gap, and
+// one that wants the price at the swap's own block, not today's.)
 func (idx *Indexer) valueSwaps(vps []valuedPool, tokens map[string]*storage.SeedTokenData, prices map[string]float64, tokenVol map[string]float64) map[string]float64 {
 	byPool := map[string]*valuedPool{}
 	for i := range vps {
@@ -328,40 +360,49 @@ func (idx *Indexer) valueSwaps(vps []valuedPool, tokens map[string]*storage.Seed
 	for _, vp := range vps {
 		out[vp.id] = 0
 	}
-	for id, sw := range idx.store.SwapsRaw() {
+	for _, sw := range idx.store.SwapsRaw() {
 		vp := byPool[strings.ToLower(sw.Pool)]
 		if vp == nil {
 			continue
 		}
 		v0, ok0 := swapLegUSD(sw.Amount0, vp.t0, tokens, prices)
 		v1, ok1 := swapLegUSD(sw.Amount1, vp.t1, tokens, prices)
-		var usd float64
 		switch {
 		case ok0 && ok1:
-			usd = (v0 + v1) / 2 // both legs priced: the mid of the two quotes
+			out[vp.id] += (v0 + v1) / 2 // both legs priced: the mid of the two quotes
 		case ok0:
-			usd = v0
+			out[vp.id] += v0
 		case ok1:
-			usd = v1
+			out[vp.id] += v1
 		default:
 			continue
 		}
-		out[vp.id] += usd
 		if ok0 {
 			tokenVol[vp.t0] += v0
 		}
 		if ok1 {
 			tokenVol[vp.t1] += v1
 		}
-		if s := fmtUSD(usd); s != sw.AmountUSD {
-			sw.AmountUSD = s
-			idx.store.SeedSwap(id, sw)
-		}
 	}
 	return out
 }
 
-// swapLegUSD converts one signed raw swap leg to its absolute USD value.
+// twoPow255 is the sign boundary of a 256-bit two's-complement word.
+var twoPow255 = new(big.Int).Lsh(big.NewInt(1), 255)
+
+// twoPow256 is 2^256, subtracted to recover the negative value of a word whose
+// high bit is set.
+var twoPow256 = new(big.Int).Lsh(big.NewInt(1), 256)
+
+// swapLegUSD converts one raw swap leg to its absolute USD value.
+//
+// A stored leg at or above 2^255 is the two's-complement encoding of a NEGATIVE
+// int256 that was persisted through an unsigned decode (the V3 handler's old
+// bug — a V3 Swap emits int256 amounts, and one leg of every swap is negative).
+// Reinterpreting it here is exact, not a heuristic: the V2 handler stores a
+// difference of two uint112 reserves, which can never reach that magnitude, so
+// the boundary is unambiguous and no re-index is needed to heal rows the old
+// build wrote.
 func swapLegUSD(raw, token string, tokens map[string]*storage.SeedTokenData, prices map[string]float64) (float64, bool) {
 	price, ok := prices[token]
 	if !ok || raw == "" {
@@ -371,7 +412,10 @@ func swapLegUSD(raw, token string, tokens map[string]*storage.SeedTokenData, pri
 	if !ok {
 		return 0, false
 	}
-	amt := normalize(new(big.Int).Abs(n), decimalsOf(token, tokens))
+	if n.Cmp(twoPow255) >= 0 {
+		n.Sub(n, twoPow256)
+	}
+	amt := normalize(n.Abs(n), decimalsOf(token, tokens))
 	return amt * price, true
 }
 
