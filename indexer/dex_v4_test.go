@@ -178,9 +178,11 @@ func TestHandleInitializeV4_PoolMarketFactory(t *testing.T) {
 	if p, _ := s.GetPool(nil, poolID); p == nil {
 		t.Fatal("expected pool from InitializeV4")
 	}
+	// The create path owns the factory tx count; poolCount is derived from the
+	// store by the valuation pass (TestRevalue_DerivesTVLPricesAndPoolCount).
 	f, _ := s.GetFactory(nil, "1")
-	if f == nil || asInt64(f.(map[string]interface{})["poolCount"]) != 1 {
-		t.Fatalf("expected factory poolCount=1, got %v", f)
+	if f == nil || asInt64(f.(map[string]interface{})["txCount"]) != 1 {
+		t.Fatalf("expected factory txCount=1, got %v", f)
 	}
 	mk, _ := s.GetByType("Market", poolID)
 	if mk == nil {
@@ -243,13 +245,17 @@ func TestBumpFactory_PreservesTVLAndVolume(t *testing.T) {
 		PoolCount: 2, TxCount: 5, TotalValueLockedUSD: "1000000", TotalVolumeUSD: "5000000",
 	})
 
-	// A pool-create bumps counts — must not zero the USD aggregates.
-	idx.bumpFactory(1)
+	// A pool-create bumps the tx count — and must not disturb any field it does
+	// not own: not the USD aggregates, and not poolCount (derived elsewhere).
+	idx.bumpFactory()
 
 	f, _ := s.GetFactory(nil, "1")
 	fm := f.(map[string]interface{})
-	if asInt64(fm["poolCount"]) != 3 {
-		t.Errorf("poolCount = %v, want 3", fm["poolCount"])
+	if asInt64(fm["txCount"]) != 6 {
+		t.Errorf("txCount = %v, want 6", fm["txCount"])
+	}
+	if asInt64(fm["poolCount"]) != 2 {
+		t.Errorf("poolCount must be carried through untouched: got %v want 2", fm["poolCount"])
 	}
 	if fmt.Sprint(fm["totalValueLockedUSD"]) != "1000000" {
 		t.Errorf("totalValueLockedUSD clobbered: got %v want 1000000", fm["totalValueLockedUSD"])
@@ -665,8 +671,11 @@ func TestHandleV2_RejectsNonFactory(t *testing.T) {
 	if p, _ := s.GetPool(nil, ct); p == nil {
 		t.Fatal("canonical PairCreated must seed the pair")
 	}
-	if f, _ := s.GetFactory(nil, "1"); f == nil || asInt64(f.(map[string]interface{})["poolCount"]) != 1 {
-		t.Fatalf("canonical PairCreated must bump factory poolCount to 1, got %v", f)
+	// poolCount is DERIVED by the valuation pass from the store (see
+	// TestRevalue_DerivesTVLPricesAndPoolCount); what the create handler owns is
+	// the factory tx count, and the registration itself — asserted above.
+	if f, _ := s.GetFactory(nil, "1"); f == nil || asInt64(f.(map[string]interface{})["txCount"]) != 1 {
+		t.Fatalf("canonical PairCreated must bump factory txCount to 1, got %v", f)
 	}
 	idx.processLog(context.Background(), swapV2Log(ct, token0, "0xreal", 1000, 2500))
 	sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil)
@@ -705,8 +714,8 @@ func TestHandleV3_RejectsNonFactory(t *testing.T) {
 	if p, _ := s.GetPool(nil, ct); p == nil {
 		t.Fatal("canonical PoolCreated must seed the pool")
 	}
-	if f, _ := s.GetFactory(nil, "1"); f == nil || asInt64(f.(map[string]interface{})["poolCount"]) != 1 {
-		t.Fatalf("canonical PoolCreated must bump factory poolCount to 1, got %v", f)
+	if f, _ := s.GetFactory(nil, "1"); f == nil || asInt64(f.(map[string]interface{})["txCount"]) != 1 {
+		t.Fatalf("canonical PoolCreated must bump factory txCount to 1, got %v", f)
 	}
 	idx.processLog(context.Background(), swapV3Log(ct, token0, "0xreal", 1000, 2500))
 	sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil)

@@ -558,3 +558,82 @@ func (s *Store) loadPool(id string) (*SeedPoolData, error) {
 	json.Unmarshal([]byte(raw), &p)
 	return &p, nil
 }
+
+// --- Raw accessors (valuation) ---
+//
+// The valuation pass (indexer/valuation.go) is the one owner of the derived USD
+// aggregates. It must read a pool/swap row, compute, and write the SAME row back
+// — and SeedPool/SeedSwap are INSERT OR REPLACE (full overwrite). Round-tripping
+// through GetPools/GetSwaps would be lossy: those return a *presentation* map
+// (tokens nested and dropped entirely when the token row is missing). These
+// accessors hand back the stored value itself so a read-modify-write preserves
+// every field the writer does not own.
+
+// PoolsRaw returns every stored pool keyed by id.
+func (s *Store) PoolsRaw() map[string]*SeedPoolData {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]*SeedPoolData{}
+	rows, err := s.db.Query("SELECT id, data FROM pools")
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			continue
+		}
+		var p SeedPoolData
+		if json.Unmarshal([]byte(raw), &p) == nil {
+			out[id] = &p
+		}
+	}
+	return out
+}
+
+// SwapsRaw returns every stored swap keyed by id.
+func (s *Store) SwapsRaw() map[string]*SeedSwapData {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]*SeedSwapData{}
+	rows, err := s.db.Query("SELECT id, data FROM swaps")
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			continue
+		}
+		var sw SeedSwapData
+		if json.Unmarshal([]byte(raw), &sw) == nil {
+			out[id] = &sw
+		}
+	}
+	return out
+}
+
+// TokensRaw returns every stored token keyed by address.
+func (s *Store) TokensRaw() map[string]*SeedTokenData {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]*SeedTokenData{}
+	rows, err := s.db.Query("SELECT id, data FROM tokens")
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			continue
+		}
+		var t SeedTokenData
+		if json.Unmarshal([]byte(raw), &t) == nil {
+			out[id] = &t
+		}
+	}
+	return out
+}
