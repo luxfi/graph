@@ -292,6 +292,12 @@ func (idx *Indexer) Run(ctx context.Context) error {
 		}()
 	}
 
+	// The valuation pass (valuation.go) derives the USD aggregates from current
+	// on-chain balances. It runs beside the log poller, not inside it: reserves
+	// are chain STATE, events are chain HISTORY, and an idle chain still has
+	// state to report. Sharing only the store keeps the two concerns apart.
+	go idx.runValuation(ctx)
+
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -498,7 +504,11 @@ func (idx *Indexer) processLog(ctx context.Context, l *logEntry) {
 		idx.handleDEXFill(l, blockNum, txHash, logIdx)
 	case SigMintV2, SigMintV3, SigBurnV2, SigBurnV3, SigSync,
 		SigCollect, SigFlash, SigInitialize, SigModifyLiquidity:
-		// Recognized but storage for these types not yet wired
+		// Deliberately inert. Every one of these events only restates what a
+		// pool HOLDS, and that is derived state the valuation pass already owns
+		// (valuation.go) — from balanceOf at head, which covers V2, V3 and V4
+		// alike and needs no history replay. Decoding them here would be a
+		// second, V2-only writer for the same field.
 
 	// ── ERC-3643 IToken ───────────────────────────────────────────────
 	case SigAddressFrozen:
@@ -676,7 +686,7 @@ func (idx *Indexer) handlePairCreated(ctx context.Context, l *logEntry) {
 	})
 	idx.seedToken(ctx, token0)
 	idx.seedToken(ctx, token1)
-	idx.bumpFactory(1)
+	idx.bumpFactory()
 }
 
 func (idx *Indexer) handlePoolCreated(ctx context.Context, l *logEntry) {
@@ -707,7 +717,7 @@ func (idx *Indexer) handlePoolCreated(ctx context.Context, l *logEntry) {
 	})
 	idx.seedToken(ctx, token0)
 	idx.seedToken(ctx, token1)
-	idx.bumpFactory(1)
+	idx.bumpFactory()
 }
 
 func (idx *Indexer) handleTransfer(ctx context.Context, l *logEntry, txHash, logIdx string) {
@@ -732,28 +742,28 @@ func decodeInt256(data string, wordIndex int) *big.Int {
 	return n
 }
 
-// bumpFactory increments the singleton factory ("1") aggregate so the
-// dashboard `factory`/`factories`/`uniswapFactories` query returns non-zero
-// pool/tx counts. One place, called from every pool/pair creation handler —
-// the factory aggregate was previously only ever seeded by tests, leaving the
-// exchange landing page's TVL/volume header empty even with live pools.
-func (idx *Indexer) bumpFactory(deltaPools int64) {
+// bumpFactory increments the singleton factory ("1") transaction count — the
+// only field of the factory aggregate that IS a running total of events, and so
+// the only one the log handlers own.
+//
+// poolCount and the USD aggregates are DERIVED, not accumulated: the valuation
+// pass reads the true pool count out of the store and recomputes TVL/volume
+// from on-chain balances every interval. An accumulator for those drifts on
+// every restart, re-index and duplicate create, and there is no reason to count
+// something the store can simply be asked for. SeedFactory is INSERT OR REPLACE,
+// so this read-modify-write carries the derived fields through untouched.
+func (idx *Indexer) bumpFactory() {
 	f, _ := idx.store.GetFactory(nil, "1")
 	var pc, tc int64
 	var tvl, vol string
 	if m, ok := f.(map[string]interface{}); ok {
 		pc = asInt64(m["poolCount"])
 		tc = asInt64(m["txCount"])
-		// Carry the accumulated USD aggregates through the read-modify-write.
-		// SeedFactory is INSERT OR REPLACE (full overwrite); writing them empty
-		// here would clobber the landing-page header's TVL/volume on every
-		// pool-create / swap. They are accumulated elsewhere (price oracle / day
-		// data); bumpFactory only owns the pool + tx counts and must preserve the rest.
 		tvl = asString(m["totalValueLockedUSD"])
 		vol = asString(m["totalVolumeUSD"])
 	}
 	idx.store.SeedFactory("1", &storage.SeedFactoryData{
-		PoolCount:           pc + deltaPools,
+		PoolCount:           pc,
 		TxCount:             tc + 1,
 		TotalValueLockedUSD: tvl,
 		TotalVolumeUSD:      vol,
@@ -813,7 +823,7 @@ func (idx *Indexer) handleInitializeV4(ctx context.Context, l *logEntry) {
 	})
 	idx.seedToken(ctx, token0)
 	idx.seedToken(ctx, token1)
-	idx.bumpFactory(1)
+	idx.bumpFactory()
 
 	// A bound market carries a human BASE/QUOTE symbol (not the raw poolId) when
 	// BOTH currencies resolve to a clean ERC20 symbol. `assetsBound` marks the
@@ -903,7 +913,7 @@ func (idx *Indexer) handleSwapV4(l *logEntry, blockNum uint64, txHash, logIdx st
 		AmountUSD: "0",
 		Sender:    sender,
 	})
-	idx.bumpFactory(0)
+	idx.bumpFactory()
 }
 
 // handleDEXFill records a native-CLOB settlement (DEXFill at 0x9999). This is

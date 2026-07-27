@@ -373,3 +373,43 @@ func (s *Store) GetPoolHourDatas(_ context.Context, limit int, orderBy, orderDir
 func (s *Store) GetTokenHourDatas(_ context.Context, limit int, orderBy, orderDirection string) (interface{}, error) {
 	return []interface{}{}, nil
 }
+
+// --- Raw accessors (valuation) ---
+// See the sqlite implementation for why the valuation pass needs the stored
+// value rather than the presentation map.
+
+// PoolsRaw returns every stored pool keyed by id.
+func (s *Store) PoolsRaw() map[string]*SeedPoolData {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]*SeedPoolData, len(s.pools))
+	for id, p := range s.pools {
+		c := *p
+		out[id] = &c
+	}
+	return out
+}
+
+// SwapsRaw returns every stored swap keyed by id.
+func (s *Store) SwapsRaw() map[string]*SeedSwapData {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]*SeedSwapData, len(s.swaps))
+	for id, sw := range s.swaps {
+		c := *sw
+		out[id] = &c
+	}
+	return out
+}
+
+// TokensRaw returns every stored token keyed by address.
+func (s *Store) TokensRaw() map[string]*SeedTokenData {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]*SeedTokenData, len(s.tokens))
+	for id, t := range s.tokens {
+		c := *t
+		out[id] = &c
+	}
+	return out
+}
