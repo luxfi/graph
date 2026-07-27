@@ -216,3 +216,97 @@ func mustFloat(t *testing.T, v interface{}) float64 {
 	}
 	return f
 }
+
+// TestSwapLegUSD_HealsUnsignedNegativeLeg pins the exact defect that made the
+// volume rollup report ~$4e72: a V3 Swap emits int256 amounts and one leg of
+// every swap is negative, but the handler decoded them unsigned, persisting
+// ~2^256 instead of a small negative number.
+func TestSwapLegUSD_HealsUnsignedNegativeLeg(t *testing.T) {
+	const token = "0x0000000000000000000000000000000000000001"
+	tokens := map[string]*storage.SeedTokenData{token: {Symbol: "USDC", Decimals: 18}}
+	prices := map[string]float64{token: 1}
+
+	// -5e18 stored through an unsigned decode: 2^256 - 5e18.
+	neg := new(big.Int).Mul(big.NewInt(-5), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
+	wrapped := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 256), neg)
+
+	got, ok := swapLegUSD(wrapped.String(), token, tokens, prices)
+	if !ok {
+		t.Fatal("leg must be valued")
+	}
+	if math.Abs(got-5) > 1e-9 {
+		t.Errorf("wrapped negative leg = $%v, want $5 (got the 2^256 reading?)", got)
+	}
+
+	// A plainly-signed leg (what the fixed V3 handler and the V2 handler write)
+	// must value identically.
+	got2, _ := swapLegUSD(neg.String(), token, tokens, prices)
+	if math.Abs(got2-5) > 1e-9 {
+		t.Errorf("signed leg = $%v, want $5", got2)
+	}
+}
+
+// TestHandleSwapV3_DecodesSignedAmounts proves the handler now persists the
+// negative leg as a negative number rather than its 2^256 complement.
+func TestHandleSwapV3_DecodesSignedAmounts(t *testing.T) {
+	const (
+		token0 = "0x0000000000000000000000000000000000000011"
+		token1 = "0x0000000000000000000000000000000000000022"
+		pool   = "0x00000000000000000000000000000000000000c3"
+	)
+	s := newMemSQLiteStore(t)
+	idx := NewWithConfig(Config{RPC: "http://unused", FactoryV2: testFactoryV2, FactoryV3: testFactoryV3}, s)
+	idx.processLog(context.Background(), poolCreatedLog(testFactoryV3, token0, token1, 3000, pool))
+	// amount0 = +1000 in, amount1 = -2500 out.
+	idx.processLog(context.Background(), swapV3Log(pool, token0, "0xreal", 1000, -2500))
+
+	raw := s.SwapsRaw()
+	if len(raw) != 1 {
+		t.Fatalf("expected exactly one swap, got %d", len(raw))
+	}
+	for _, sw := range raw {
+		if sw.Amount1 != "-2500" {
+			t.Errorf("amount1 = %q, want \"-2500\" (an unsigned read gives a ~78-digit number)", sw.Amount1)
+		}
+		if sw.Amount0 != "1000" {
+			t.Errorf("amount0 = %q, want \"1000\"", sw.Amount0)
+		}
+	}
+}
+
+// TestRevalue_DoesNotRewriteSwapRows pins the performance defect that wedged a
+// whole chain: valuing must be O(pools) writes, never O(swaps) writes.
+func TestRevalue_DoesNotRewriteSwapRows(t *testing.T) {
+	const (
+		usdc = "0x0000000000000000000000000000000000000001"
+		wlux = "0x0000000000000000000000000000000000000003"
+		pool = "0x00000000000000000000000000000000000000d1"
+	)
+	s := newMemSQLiteStore(t)
+	s.SeedToken(usdc, &storage.SeedTokenData{Symbol: "USDC", Decimals: 18})
+	s.SeedToken(wlux, &storage.SeedTokenData{Symbol: "WLUX", Decimals: 18})
+	s.SeedPool(pool, &storage.SeedPoolData{Token0: wlux, Token1: usdc, FeeTier: 3000})
+	s.SeedSwap("swap-1", &storage.SeedSwapData{
+		Timestamp: 1, Pool: pool, Amount0: "1000000000000000000", Amount1: "-25000000000000000000",
+		AmountUSD: "0", Sender: "0xabc",
+	})
+
+	srv := balanceRPC(t, map[string]string{
+		wlux + "@" + pool: hexWord(4000),
+		usdc + "@" + pool: hexWord(100),
+	})
+	idx := NewWithConfig(Config{RPC: srv.URL}, s)
+	idx.revalue(context.Background())
+
+	// 1 WLUX @ $0.025 = $0.025; 25 USDC = $25; mid = $12.5125.
+	p, _ := s.GetPool(nil, pool)
+	if got := fmt.Sprint(p.(map[string]interface{})["volumeUSD"]); got != "12.51" {
+		t.Errorf("pool volumeUSD = %q, want 12.51", got)
+	}
+	// The swap row itself is untouched — valuing must not write O(swaps) rows.
+	for _, sw := range s.SwapsRaw() {
+		if sw.AmountUSD != "0" {
+			t.Errorf("valuation must not rewrite swap rows; amountUSD became %q", sw.AmountUSD)
+		}
+	}
+}

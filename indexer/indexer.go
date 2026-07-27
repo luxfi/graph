@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -49,6 +48,11 @@ type Config struct {
 	// StartBlock is the genesis-relative block to (re)index from. On a clean
 	// chain relaunch the indexer rewinds to this value (see poll's reorg guard).
 	StartBlock uint64
+	// Label names this indexer in its log lines — e.g. "cchain/amm". A process
+	// that runs one indexer per (chain, subgraph) is otherwise unable to say
+	// WHICH indexer emitted a line, and an indexer that never logs is then
+	// indistinguishable from one that is wedged. Empty => unprefixed.
+	Label string
 	// DexRPC, when non-empty, is the native D-Chain (dexvm) CLOB read-RPC root —
 	// e.g. http://node:9650/ext/bc/D/dex. Setting it runs an ADDITIONAL, orthogonal
 	// CLOBSource (clob.go) that polls dex_get_{markets,trades,orders} and writes
@@ -90,6 +94,7 @@ type Indexer struct {
 	poolManager string // lower-cased 0x9999 settlement address
 	factoryV2   string // lower-cased canonical V2 factory (PairCreated trust root)
 	factoryV3   string // lower-cased canonical V3 factory (PoolCreated trust root)
+	label       string // log prefix identifying this indexer (see Config.Label)
 	startBlock  uint64
 	store       *storage.Store
 	client      *http.Client
@@ -141,6 +146,7 @@ func NewWithConfig(cfg Config, store *storage.Store) *Indexer {
 		poolManager: strings.ToLower(pm),
 		factoryV2:   strings.ToLower(fv2),
 		factoryV3:   strings.ToLower(fv3),
+		label:       cfg.Label,
 		startBlock:  cfg.StartBlock,
 		store:       store,
 		client: &http.Client{
@@ -196,7 +202,7 @@ func (idx *Indexer) ensureGenesisHash(ctx context.Context) {
 	}
 	h, err := idx.genesisHashFn(ctx)
 	if err != nil {
-		log.Printf("[indexer] genesis hash baseline unavailable (will retry): %v", err)
+		idx.logf("[indexer] genesis hash baseline unavailable (will retry): %v", err)
 		return
 	}
 	idx.genesisHash = h
@@ -240,7 +246,7 @@ func (idx *Indexer) maybeResetForRegenesis(ctx context.Context, latest uint64) {
 	}
 	idx.lowHeadStreak++
 	if idx.lowHeadStreak < regenesisConfirmations {
-		log.Printf("[indexer] head %d << cursor %d (>%d behind) — suspected chain reset, awaiting confirmation %d/%d",
+		idx.logf("[indexer] head %d << cursor %d (>%d behind) — suspected chain reset, awaiting confirmation %d/%d",
 			latest, idx.lastBlock, reorgDepth, idx.lowHeadStreak, regenesisConfirmations)
 		return
 	}
@@ -248,27 +254,27 @@ func (idx *Indexer) maybeResetForRegenesis(ctx context.Context, latest uint64) {
 	// Streak confirmed — spend one RPC for the deterministic check.
 	current, err := idx.genesisHashFn(ctx)
 	if err != nil {
-		log.Printf("[indexer] head %d << cursor %d for %d polls but genesis-hash probe failed (%v) — "+
+		idx.logf("[indexer] head %d << cursor %d for %d polls but genesis-hash probe failed (%v) — "+
 			"NOT wiping; cannot confirm a reset without a canonical signal", latest, idx.lastBlock, idx.lowHeadStreak, err)
 		return
 	}
 	if idx.genesisHash == "" {
 		// No baseline yet — adopt the current hash and decline to wipe this round.
 		idx.genesisHash = current
-		log.Printf("[indexer] head %d << cursor %d but no genesis baseline yet — captured %s, NOT wiping",
+		idx.logf("[indexer] head %d << cursor %d but no genesis baseline yet — captured %s, NOT wiping",
 			latest, idx.lastBlock, current)
 		return
 	}
 	if current == idx.genesisHash {
 		// Same chain, just deeply behind/idle. The poll-count gate alone would have
 		// wiped here; the genesis hash proves it canonical, so we hold the cursor.
-		log.Printf("[indexer] head %d << cursor %d for %d polls but genesis hash unchanged (%s) — "+
+		idx.logf("[indexer] head %d << cursor %d for %d polls but genesis hash unchanged (%s) — "+
 			"canonical chain behind a stale backend, NOT wiping", latest, idx.lastBlock, idx.lowHeadStreak, current)
 		idx.lowHeadStreak = 0
 		return
 	}
 
-	log.Printf("[indexer] genesis hash changed %s -> %s (head %d << cursor %d) — re-genesis confirmed, rewinding to %d",
+	idx.logf("[indexer] genesis hash changed %s -> %s (head %d << cursor %d) — re-genesis confirmed, rewinding to %d",
 		idx.genesisHash, current, latest, idx.lastBlock, idx.startBlock)
 	idx.lastBlock = idx.startBlock
 	idx.store.SetLastBlock(idx.startBlock)
@@ -282,12 +288,12 @@ func (idx *Indexer) maybeResetForRegenesis(ctx context.Context, latest uint64) {
 // only the store. A native-DEX chain has its trading state on the D-Chain, not on
 // the EVM RPC, so both sources run to populate the AMM (EVM) and DEX (CLOB) views.
 func (idx *Indexer) Run(ctx context.Context) error {
-	log.Printf("[indexer] starting — rpc=%s lastBlock=%d", idx.rpc, idx.lastBlock)
+	idx.logf("[indexer] starting — rpc=%s lastBlock=%d", idx.rpc, idx.lastBlock)
 
 	if idx.clob != nil {
 		go func() {
 			if err := idx.clob.Run(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("[indexer] clob source: %v", err)
+				idx.logf("[indexer] clob source: %v", err)
 			}
 		}()
 	}
@@ -307,7 +313,7 @@ func (idx *Indexer) Run(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			if err := idx.pollGuarded(ctx); err != nil {
-				log.Printf("[indexer] poll error: %v", err)
+				idx.logf("[indexer] poll error: %v", err)
 			}
 		}
 	}
@@ -468,7 +474,7 @@ func (idx *Indexer) poll(ctx context.Context) error {
 	idx.store.SetLastBlock(toBlock)
 
 	if len(logs) > 0 {
-		log.Printf("[indexer] blocks %d..%d — %d events", fromBlock, toBlock, len(logs))
+		idx.logf("[indexer] blocks %d..%d — %d events", fromBlock, toBlock, len(logs))
 	}
 	return nil
 }
@@ -646,8 +652,12 @@ func (idx *Indexer) handleSwapV3(l *logEntry, blockNum uint64, txHash, logIdx st
 	if len(l.Topics) > 1 {
 		sender = topicAddr(l.Topics[1])
 	}
-	amount0 := decodeUint256(l.Data, 0)
-	amount1 := decodeUint256(l.Data, 1)
+	// A V3 Swap emits `int256 amount0, int256 amount1` — one leg of every swap
+	// is NEGATIVE (the token leaving the pool). Reading them unsigned turned
+	// that leg into ~2^256, which is invisible until something actually adds the
+	// amounts up: the volume rollup then reported astronomical figures.
+	amount0 := decodeInt256(l.Data, 0)
+	amount1 := decodeInt256(l.Data, 1)
 
 	idx.store.SeedSwap(id, &storage.SeedSwapData{
 		Timestamp: int64(blockNum),
@@ -1064,7 +1074,7 @@ func (idx *Indexer) BackfillTokens(ctx context.Context) (int, error) {
 			enriched++
 		}
 	}
-	log.Printf("[indexer] token backfill complete — %d/%d enriched", enriched, len(rows))
+	idx.logf("[indexer] token backfill complete — %d/%d enriched", enriched, len(rows))
 	return enriched, nil
 }
 
