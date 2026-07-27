@@ -592,12 +592,19 @@ func (s *Store) PoolsRaw() map[string]*SeedPoolData {
 	return out
 }
 
-// SwapsRaw returns every stored swap keyed by id.
-func (s *Store) SwapsRaw() map[string]*SeedSwapData {
+// RecentSwapsRaw returns the `limit` most recent stored swaps keyed by id,
+// newest first by the indexed timestamp column.
+//
+// The bound is not an optimisation. A live chain's swap table grows without
+// limit — the Lux C-Chain's already spans a million blocks — so an unbounded
+// read would make every caller's cost grow forever with chain age. Callers that
+// summarise recent activity take a window; nothing needs the whole table in
+// memory at once.
+func (s *Store) RecentSwapsRaw(limit int) map[string]*SeedSwapData {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := map[string]*SeedSwapData{}
-	rows, err := s.db.Query("SELECT id, data FROM swaps")
+	rows, err := s.db.Query("SELECT id, data FROM swaps ORDER BY timestamp DESC LIMIT ?", limit)
 	if err != nil {
 		return out
 	}

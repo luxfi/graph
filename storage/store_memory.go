@@ -4,6 +4,7 @@ package storage
 
 import (
 	"context"
+	"sort"
 	"sync"
 )
 
@@ -390,13 +391,22 @@ func (s *Store) PoolsRaw() map[string]*SeedPoolData {
 	return out
 }
 
-// SwapsRaw returns every stored swap keyed by id.
-func (s *Store) SwapsRaw() map[string]*SeedSwapData {
+// RecentSwapsRaw returns the `limit` most recent stored swaps keyed by id.
+// See the sqlite implementation for why the bound exists.
+func (s *Store) RecentSwapsRaw(limit int) map[string]*SeedSwapData {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make(map[string]*SeedSwapData, len(s.swaps))
-	for id, sw := range s.swaps {
-		c := *sw
+	ids := make([]string, 0, len(s.swaps))
+	for id := range s.swaps {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return s.swaps[ids[i]].Timestamp > s.swaps[ids[j]].Timestamp })
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	out := make(map[string]*SeedSwapData, len(ids))
+	for _, id := range ids {
+		c := *s.swaps[id]
 		out[id] = &c
 	}
 	return out

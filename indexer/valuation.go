@@ -55,6 +55,15 @@ const valuationInterval = 30 * time.Second
 // maxValuedPools caps one pass. Far above any real book; a guard, not a policy.
 const maxValuedPools = 5000
 
+// maxValuedSwaps bounds the swap history one pass summarises, newest first.
+//
+// This one IS a policy, so it is stated rather than buried: a chain's swap
+// table grows forever, and a pass that rescans all of it does more work every
+// day the chain lives. Beyond this many trades the reported volume is the
+// volume of the most recent maxValuedSwaps of them, and the pass says so in its
+// log rather than presenting a partial sum as a total.
+const maxValuedSwaps = 50000
+
 // selBalanceOf is `balanceOf(address)`.
 const selBalanceOf = "0x70a08231"
 
@@ -150,7 +159,7 @@ func (idx *Indexer) revalue(parent context.Context) {
 	// ── Pools: TVL, spot prices, volume ────────────────────────────────
 	tokenTVL := map[string]float64{}
 	tokenVol := map[string]float64{}
-	poolVol := idx.valueSwaps(vps, tokens, prices, tokenVol)
+	poolVol, swapsSeen := idx.valueSwaps(vps, tokens, prices, tokenVol)
 
 	var totalTVL, totalVol float64
 	for _, vp := range vps {
@@ -225,9 +234,13 @@ func (idx *Indexer) revalue(parent context.Context) {
 		TotalVolumeUSD:      fmtUSD(totalVol),
 	})
 
-	idx.logf("[valuation] %d/%d pools valued, %d tokens priced — TVL $%s, volume $%s (%s)",
-		len(vps), len(pools), len(prices), fmtUSD(totalTVL), fmtUSD(totalVol),
-		time.Since(started).Round(time.Millisecond))
+	window := ""
+	if swapsSeen >= maxValuedSwaps {
+		window = fmt.Sprintf(" [volume covers the most recent %d swaps only]", maxValuedSwaps)
+	}
+	idx.logf("[valuation] %d/%d pools valued, %d tokens priced, %d swaps — TVL $%s, volume $%s (%s)%s",
+		len(vps), len(pools), len(prices), swapsSeen, fmtUSD(totalTVL), fmtUSD(totalVol),
+		time.Since(started).Round(time.Millisecond), window)
 }
 
 // readBalances asks each pool's two tokens what the pool holds. One eth_call
@@ -344,14 +357,14 @@ func priceTokens(vps []valuedPool, tokens map[string]*storage.SeedTokenData) map
 // valueSwaps prices the stored swap history and returns per-pool volume,
 // accumulating per-token volume into tokenVol.
 //
-// It READS the swap rows and writes nothing. An earlier cut also wrote each
+// It READS a bounded window of the newest swap rows and writes nothing. An earlier cut also wrote each
 // swap's own amountUSD back, which turned one pass into O(swaps) serialized
 // INSERT OR REPLACEs every interval — on a chain with a real trade history the
 // pass never finished, so its chain silently produced no aggregates at all
 // while a quiet chain beside it looked fine. Volume is a per-pool rollup; it
 // belongs on the pool. (Per-swap amountUSD remains "0" — a separate gap, and
 // one that wants the price at the swap's own block, not today's.)
-func (idx *Indexer) valueSwaps(vps []valuedPool, tokens map[string]*storage.SeedTokenData, prices map[string]float64, tokenVol map[string]float64) map[string]float64 {
+func (idx *Indexer) valueSwaps(vps []valuedPool, tokens map[string]*storage.SeedTokenData, prices map[string]float64, tokenVol map[string]float64) (map[string]float64, int) {
 	byPool := map[string]*valuedPool{}
 	for i := range vps {
 		byPool[vps[i].id] = &vps[i]
@@ -360,7 +373,8 @@ func (idx *Indexer) valueSwaps(vps []valuedPool, tokens map[string]*storage.Seed
 	for _, vp := range vps {
 		out[vp.id] = 0
 	}
-	for _, sw := range idx.store.SwapsRaw() {
+	swaps := idx.store.RecentSwapsRaw(maxValuedSwaps)
+	for _, sw := range swaps {
 		vp := byPool[strings.ToLower(sw.Pool)]
 		if vp == nil {
 			continue
@@ -384,7 +398,7 @@ func (idx *Indexer) valueSwaps(vps []valuedPool, tokens map[string]*storage.Seed
 			tokenVol[vp.t1] += v1
 		}
 	}
-	return out
+	return out, len(swaps)
 }
 
 // twoPow255 is the sign boundary of a 256-bit two's-complement word.
