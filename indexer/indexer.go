@@ -54,7 +54,7 @@ type Config struct {
 	// indistinguishable from one that is wedged. Empty => unprefixed.
 	Label string
 	// DexRPC, when non-empty, is the native D-Chain (dexvm) CLOB read-RPC root —
-	// e.g. http://node:9650/ext/bc/D/dex. Setting it runs an ADDITIONAL, orthogonal
+	// e.g. http://node:9650/v1/bc/D/dex. Setting it runs an ADDITIONAL, orthogonal
 	// CLOBSource (clob.go) that polls dex_get_{markets,trades,orders} and writes
 	// the same Market/Fill/Order entities the EVM 0x9999 path writes. This is the
 	// native trading source: a D-Chain trade is a consensus state transition, not an
