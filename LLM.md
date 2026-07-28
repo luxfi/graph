@@ -25,7 +25,7 @@ The `dex` subgraph (markets/fills/orders/orderbook) can be fed from either or bo
    trade engine IS the D-Chain (dexvm): a trade is a consensus state transition at
    `Block.Verify`, NOT an EVM event, so it NEVER appears on the EVM RPC. `CLOBSource`
    (`indexer/clob.go`) polls the committed-state read RPC
-   `…/ext/bc/<D>/dex/clob_get_{markets,trades,orders}` (GET/JSON, READ-ONLY, zero
+   `…/v1/bc/<D>/dex/clob_get_{markets,trades,orders}` (GET/JSON, READ-ONLY, zero
    consensus impact — see `luxfi/dex pkg/dchain/read.go`) and writes the SAME
    Market/Fill/Order entities the resolvers serve. Enabled by `Config.DexRPC` (graph)
    / `dex_rpc:` per-chain (explorer `chains.yaml`); empty = source 1 only.
