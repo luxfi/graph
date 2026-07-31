@@ -1,0 +1,78 @@
+name: Release
+
+# Builds ghcr.io/luxfi/graph on the native runners (git.hanzo.ai → git-runner).
+#
+# This replaces .github/workflows/docker.yml, which was the only thing pushing
+# this image and which ran on `runs-on: lux-build` — an ARC autoscaling runner
+# set that no longer exists. The cluster has no ARC CRDs, no ARC namespace and
+# no such pool, so every `v*` tag queued a job nothing could pick up. A job
+# naming a label no runner carries does not fail; it waits.
+#
+# Two further things had to change for this to work off GitHub at all:
+#
+#   * ghcr auth. The old workflow logged in with the instance GITHUB_TOKEN. On
+#     this forge that is a Hanzo Git token and carries no rights at ghcr.io, so
+#     the login step is a guaranteed failure. GHCR_USER / GHCR_TOKEN are org
+#     Actions secrets sourced from KMS, which is what luxfi/node and luxfi/kms
+#     authenticate with.
+#
+#   * Layer cache. `type=gha` is the GitHub-hosted Actions cache service. The
+#     registry cache is backend-independent and lives next to the image it
+#     caches.
+#
+# Semver-only: only a v* tag produces a {{version}} manifest, plus an immutable
+# sha tag on every run. No :latest, no floating tags.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A release is not made irrelevant by a newer one — let it finish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  docker:
+    runs-on: [lux-build-linux-amd64]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          driver-opts: network=host
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USER }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/luxfi/graph
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+
+      # amd64 only. The pool is amd64 and QEMU arm64 emulation takes this build
+      # from minutes to hours; arm64 returns when we own an arm64 runner, as a
+      # native matrix entry.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=registry,ref=ghcr.io/luxfi/graph:buildcache
+          cache-to: type=registry,ref=ghcr.io/luxfi/graph:buildcache,mode=max
+          provenance: false
+          push: true
