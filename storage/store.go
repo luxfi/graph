@@ -104,11 +104,16 @@ func compareValues(a, b interface{}) int {
 
 // FilterResults filters a slice of map results by where conditions.
 // Supports exact match and _gte, _lte, _gt, _lt suffixes for numeric comparisons.
+//
+// The result is always non-nil: filtering everything out yields an empty list,
+// never nil. A nil slice encodes as JSON `null`, and a GraphQL list field that
+// answers `null` reads as "this collection does not exist" (broken subgraph)
+// rather than "nothing matched" — see ListByType.
 func FilterResults(results []interface{}, where map[string]interface{}) []interface{} {
 	if len(where) == 0 {
 		return results
 	}
-	var out []interface{}
+	out := []interface{}{}
 	for _, r := range results {
 		m, ok := r.(map[string]interface{})
 		if !ok {
