@@ -149,6 +149,14 @@ func (s *Store) GetByType(entityType, id string) (interface{}, error) {
 	return v, nil
 }
 
+// ListByType returns every entity of a type, up to limit. The result is always
+// a list — an unpopulated type yields an empty one.
+//
+// It must never be a nil slice: nil encodes as JSON `null`, and a GraphQL list
+// field answering `null` is the wire signature of a subgraph that is not
+// deployed or is erroring, not of one that has simply seen no events yet. The
+// `dex` subgraph answered `{"markets":null}` for exactly this reason while it
+// was deployed, subscribed to 0x9999 and fully caught up to the chain head.
 func (s *Store) ListByType(entityType string, limit int) (interface{}, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -157,7 +165,7 @@ func (s *Store) ListByType(entityType string, limit int) (interface{}, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var result []interface{}
+	result := []interface{}{}
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
@@ -212,7 +220,7 @@ func (s *Store) GetTokens(_ context.Context, limit int, orderBy, orderDirection 
 	}
 	defer rows.Close()
 
-	var result []interface{}
+	result := []interface{}{}
 	for rows.Next() {
 		var id, raw string
 		if err := rows.Scan(&id, &raw); err != nil {
@@ -257,7 +265,7 @@ func (s *Store) GetFactories(_ context.Context) (interface{}, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var result []interface{}
+	result := []interface{}{}
 	for rows.Next() {
 		var id, raw string
 		if err := rows.Scan(&id, &raw); err != nil {
@@ -325,7 +333,7 @@ func (s *Store) GetPools(_ context.Context, limit int, orderBy, orderDirection s
 	}
 	rows.Close()
 
-	var result []interface{}
+	result := []interface{}{}
 	for _, pp := range pools {
 		p := pp.p
 		result = append(result, s.poolToMap(pp.id, &p))
@@ -416,7 +424,7 @@ func (s *Store) GetSwaps(_ context.Context, limit int, orderBy, orderDirection s
 	}
 	rows.Close()
 
-	var result []interface{}
+	result := []interface{}{}
 	for _, ss := range swaps {
 		sw := ss.sw
 		result = append(result, s.swapToMap(ss.id, &sw))

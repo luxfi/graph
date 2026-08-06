@@ -110,11 +110,14 @@ func (s *Store) GetByType(entityType, id string) (interface{}, error) {
 	return nil, nil
 }
 
+// ListByType returns every entity of a type, up to limit. The result is always
+// a list — an unpopulated type yields an empty one, never a nil slice (which
+// would encode as JSON `null`; see the sqlite backend for why that matters).
 func (s *Store) ListByType(entityType string, limit int) (interface{}, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	prefix := entityType + ":"
-	var result []interface{}
+	result := []interface{}{}
 	for k, v := range s.generic {
 		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
 			result = append(result, v)
@@ -160,7 +163,7 @@ func (s *Store) GetToken(_ context.Context, addr string) (interface{}, error) {
 func (s *Store) GetTokens(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var result []interface{}
+	result := []interface{}{}
 	for addr, t := range s.tokens {
 		result = append(result, map[string]interface{}{
 			"id": addr, "symbol": t.Symbol, "name": t.Name, "decimals": t.Decimals,
@@ -193,7 +196,7 @@ func (s *Store) GetFactory(_ context.Context, id string) (interface{}, error) {
 func (s *Store) GetFactories(_ context.Context) (interface{}, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var result []interface{}
+	result := []interface{}{}
 	for id, f := range s.factories {
 		result = append(result, map[string]interface{}{
 			"id": id, "poolCount": f.PoolCount, "txCount": f.TxCount,
@@ -226,7 +229,7 @@ func (s *Store) GetPool(_ context.Context, id string) (interface{}, error) {
 func (s *Store) GetPools(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var result []interface{}
+	result := []interface{}{}
 	for id, p := range s.pools {
 		result = append(result, s.poolToMap(id, p))
 	}
@@ -270,7 +273,7 @@ func (s *Store) GetSwap(_ context.Context, id string) (interface{}, error) {
 func (s *Store) GetSwaps(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var result []interface{}
+	result := []interface{}{}
 	for id, sw := range s.swaps {
 		result = append(result, s.swapToMap(id, sw))
 	}

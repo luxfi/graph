@@ -78,6 +78,36 @@ func TestDexSchema_ResolvesMarketsAndFills(t *testing.T) {
 	}
 }
 
+// TestDexSchema_EmptyIsAnEmptyList pins the wire answer of a healthy-but-idle dex
+// subgraph. Before this was fixed, a mounted subgraph that was subscribed to 0x9999
+// and caught up to the chain head still answered `{"data":{"markets":null}}` — the
+// wire signature of a subgraph that is NOT deployed. Operators cannot tell "no fills
+// yet" from "the pipe is broken" unless empty means [].
+//
+// The three states must be distinguishable on the wire:
+//
+//	not deployed  -> {"errors":[{"message":"unknown field: markets"}]}
+//	erroring      -> {"errors":[…]}
+//	deployed,idle -> {"data":{"markets":[]}}
+func TestDexSchema_EmptyIsAnEmptyList(t *testing.T) {
+	eng, _ := newDexEngine(t) // no entities seeded: the live mainnet condition
+
+	for _, q := range []string{
+		"{ markets { id } }",
+		"{ fills(first: 25){ id market taker amountOut timestamp txHash } }",
+		"{ orders(first: 25){ id } }",
+	} {
+		resp := eng.Execute(context.Background(), &Request{Query: q})
+		if len(resp.Errors) != 0 {
+			t.Fatalf("%s: unexpected errors on an idle subgraph: %+v", q, resp.Errors)
+		}
+		raw, _ := json.Marshal(resp.Data)
+		if strings.Contains(string(raw), "null") {
+			t.Errorf("%s answered %s; an idle subgraph must answer with an empty list, not null", q, raw)
+		}
+	}
+}
+
 // TestAmmSchema_DoesNotResolveMarkets pins the negative half: the amm schema does NOT
 // know `markets` (it returns an unknown-field error) — which is WHY the exchange-api
 // must route CLOB queries to the dex endpoint. This mirrors Red's live finding.
