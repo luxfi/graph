@@ -46,8 +46,22 @@ import (
 // Config controls query execution limits.
 type Config struct {
 	MaxQueryDepth  int `json:"maxQueryDepth" yaml:"max_query_depth"`
+	MaxTopFields   int `json:"maxTopFields" yaml:"max_top_fields"`
 	MaxResultSize  int `json:"maxResultSize" yaml:"max_result_size"`
 	QueryTimeoutMs int `json:"queryTimeoutMs" yaml:"query_timeout_ms"`
+}
+
+// A page that asks for several tables at once is ordinary, not abusive: the
+// Explore transactions view alone requests 23. The cap exists to bound work per
+// request, so it sits with the other limits rather than as a literal at the
+// check.
+const defaultMaxTopFields = 64
+
+func (e *Engine) maxTopFields() int {
+	if e.config == nil || e.config.MaxTopFields <= 0 {
+		return defaultMaxTopFields
+	}
+	return e.config.MaxTopFields
 }
 
 // Engine executes GraphQL queries against indexed data.
@@ -93,7 +107,7 @@ type Error struct {
 // New creates a query engine backed by the given store.
 func New(store *storage.Store, cfg *Config) *Engine {
 	if cfg == nil {
-		cfg = &Config{MaxQueryDepth: 10, MaxResultSize: 1 << 20, QueryTimeoutMs: 30000}
+		cfg = &Config{MaxQueryDepth: 10, MaxTopFields: defaultMaxTopFields, MaxResultSize: 1 << 20, QueryTimeoutMs: 30000}
 	}
 
 	e := &Engine{
@@ -289,8 +303,8 @@ func (e *Engine) Execute(ctx context.Context, req *Request) *Response {
 		return &Response{Errors: []Error{{Message: err.Error()}}}
 	}
 
-	if len(fields) > 20 {
-		return &Response{Errors: []Error{{Message: fmt.Sprintf("too many top-level fields (%d), maximum 20", len(fields))}}}
+	if max := e.maxTopFields(); len(fields) > max {
+		return &Response{Errors: []Error{{Message: fmt.Sprintf("too many top-level fields (%d), maximum %d", len(fields), max)}}}
 	}
 
 	data := make(map[string]interface{})
