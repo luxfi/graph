@@ -638,6 +638,7 @@ func (idx *Indexer) handleSwapV2(l *logEntry, blockNum uint64, txHash, logIdx st
 		AmountUSD: "0",
 		Sender:    sender,
 	})
+	idx.bumpSwapCounts(l.Address)
 }
 
 func (idx *Indexer) handleSwapV3(l *logEntry, blockNum uint64, txHash, logIdx string) {
@@ -667,6 +668,7 @@ func (idx *Indexer) handleSwapV3(l *logEntry, blockNum uint64, txHash, logIdx st
 		AmountUSD: "0",
 		Sender:    sender,
 	})
+	idx.bumpSwapCounts(l.Address)
 }
 
 func (idx *Indexer) handlePairCreated(ctx context.Context, l *logEntry) {
@@ -762,6 +764,44 @@ func decodeInt256(data string, wordIndex int) *big.Int {
 // every restart, re-index and duplicate create, and there is no reason to count
 // something the store can simply be asked for. SeedFactory is INSERT OR REPLACE,
 // so this read-modify-write carries the derived fields through untouched.
+// bumpSwapCounts records that one swap touched a pool: the pool's own txCount,
+// both of its tokens', and the factory's. Every swap handler (V2/V3/V4) calls
+// this and nothing else counts swaps, so the four aggregates cannot drift apart.
+//
+// Without it the swaps were stored but nothing counted them, and every txCount
+// the explorer served read 0 — pools, tokens and "all-time trades" alike.
+func (idx *Indexer) bumpSwapCounts(poolID string) {
+	pools := idx.store.PoolsRaw()
+	p, ok := pools[strings.ToLower(poolID)]
+	if !ok {
+		if p, ok = pools[poolID]; !ok {
+			return // a swap from a pool we never registered is already dropped upstream
+		}
+	}
+
+	next := *p
+	next.TxCount = p.TxCount + 1
+	idx.store.SeedPool(poolID, &next)
+
+	tokens := idx.store.TokensRaw()
+	for _, addr := range []string{next.Token0, next.Token1} {
+		if addr == "" {
+			continue
+		}
+		t, ok := tokens[strings.ToLower(addr)]
+		if !ok {
+			if t, ok = tokens[addr]; !ok {
+				continue
+			}
+		}
+		nt := *t
+		nt.TxCount = t.TxCount + 1
+		idx.store.SeedToken(addr, &nt)
+	}
+
+	idx.bumpFactory()
+}
+
 func (idx *Indexer) bumpFactory() {
 	f, _ := idx.store.GetFactory(nil, "1")
 	var pc, tc int64
@@ -923,6 +963,7 @@ func (idx *Indexer) handleSwapV4(l *logEntry, blockNum uint64, txHash, logIdx st
 		AmountUSD: "0",
 		Sender:    sender,
 	})
+	idx.bumpSwapCounts(poolID)
 	idx.bumpFactory()
 }
 
