@@ -102,6 +102,7 @@ func main() {
 		FactoryV2:   os.Getenv("FACTORY_V2"),
 		FactoryV3:   os.Getenv("FACTORY_V3"),
 		PoolManager: os.Getenv("POOL_MANAGER"),
+		Native:      os.Getenv("WRAPPED_NATIVE"),
 	}, store)
 	// One-shot enrichment of Token rows persisted by an older build with the
 	// address placeholder (symbol == shortAddr). Opt-in via BACKFILL_TOKENS=1 so

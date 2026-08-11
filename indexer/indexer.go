@@ -45,6 +45,12 @@ type Config struct {
 	// FactoryV3 is the canonical Uniswap-v3 factory — same trust-root role as
 	// FactoryV2 for PoolCreated and V3 Swaps. Lower-cased on construction.
 	FactoryV3 string
+	// Native is the wrapped native token (WLUX on Lux, WZOO on Zoo). The wire
+	// format quotes every token against it — `token.derivedETH` is a price in
+	// native units and `bundle.ethPriceUSD` is what one native unit is worth —
+	// so this address is what makes a price expressible at all. Lower-cased on
+	// construction. Empty => Lux mainnet's.
+	Native string
 	// StartBlock is the genesis-relative block to (re)index from. On a clean
 	// chain relaunch the indexer rewinds to this value (see poll's reorg guard).
 	StartBlock uint64
@@ -94,6 +100,7 @@ type Indexer struct {
 	poolManager string // lower-cased 0x9999 settlement address
 	factoryV2   string // lower-cased canonical V2 factory (PairCreated trust root)
 	factoryV3   string // lower-cased canonical V3 factory (PoolCreated trust root)
+	native      string // lower-cased wrapped native token — the unit `derivedETH` is denominated in
 	label       string // log prefix identifying this indexer (see Config.Label)
 	startBlock  uint64
 	store       *storage.Store
@@ -141,11 +148,16 @@ func NewWithConfig(cfg Config, store *storage.Store) *Indexer {
 	if fv3 == "" {
 		fv3 = LuxMainnet.FactoryV3
 	}
+	native := cfg.Native
+	if native == "" {
+		native = LuxMainnet.WETH
+	}
 	idx := &Indexer{
 		rpc:         cfg.RPC,
 		poolManager: strings.ToLower(pm),
 		factoryV2:   strings.ToLower(fv2),
 		factoryV3:   strings.ToLower(fv3),
+		native:      strings.ToLower(native),
 		label:       cfg.Label,
 		startBlock:  cfg.StartBlock,
 		store:       store,
