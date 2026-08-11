@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"context"
 	"testing"
 
 	"github.com/luxfi/graph/storage"
@@ -22,6 +23,12 @@ func newTestIndexer(t *testing.T) *Indexer {
 	store, err := storage.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("storage.New: %v", err)
+	}
+	// Opening a store does not create its tables. Without this every Seed below
+	// writes into nothing — the calls report no error, so the fixture looks
+	// built and the assertions fail somewhere far from the cause.
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("storage.Init: %v", err)
 	}
 	idx := NewWithConfig(Config{RPC: "http://127.0.0.1:0"}, store)
 	idx.store.SeedPool(testPool, &storage.SeedPoolData{

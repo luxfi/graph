@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"context"
 	"math"
 	"strconv"
 	"testing"
@@ -32,6 +33,11 @@ func priced(t *testing.T) *Indexer {
 	store, err := storage.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("storage.New: %v", err)
+	}
+	// Opening a store does not create its tables, and a Seed into a table that
+	// is not there returns nothing to complain about.
+	if err := store.Init(context.Background()); err != nil {
+		t.Fatalf("storage.Init: %v", err)
 	}
 	idx := NewWithConfig(Config{RPC: "http://127.0.0.1:0", Native: wlux}, store)
 	idx.store.SeedToken(wlux, &storage.SeedTokenData{Symbol: "WLUX", Decimals: 18})
