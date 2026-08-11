@@ -14,6 +14,56 @@ This file (`CLAUDE.md`) is the canonical agent-facing readme; `LLM.md` is a syml
 - `.github/workflows/` — CI surface
 - `docs/` — extended docs (if present)
 
+## A swap's `timestamp` is a TIME, and the poll is what makes it one
+
+`eth_getLogs` says which block a log was in and never when it was mined. Until
+v1.2.17 the swap handlers wrote the block NUMBER into `timestamp`, so trade
+history dated every fill to 1970 and no day could be computed from a swap at
+all. `stampTimes` (blocks.go) now reads one batch of headers per poll and hangs
+the time on the `logEntry`, and `poll` returns an error rather than advancing
+past a block whose header did not answer — **a block is indexed when it has been
+read whole**.
+
+`SeedSwapData.Block` is what tells an old row from a new one: no swap is mined
+in block 0, so `Block == 0` means "the number in Timestamp is a block number",
+which is exactly what `healSwapTimes` needs to look the real time up. That is
+`Dated()`, and both the heal and the day series ask it. The heal runs once at
+`Run` and stops when every row has a time.
+
+## The day series (series.go) is a SECOND FOLD over the valuation pass's trades
+
+`tokenDayDatas` / `poolDayDatas` / `uniswapDayDatas` are rolled out of the swaps
+already on disk, which is why history appears the moment a build ships instead
+of starting that day. `valuedTrades` reads and values the swap window ONCE;
+`valueSwaps` folds it into running totals and `writeSeries` folds the same
+stream into days. Do not add a second read or a second pricing path —
+valuation.go owns pricing (see its header).
+
+- **What is exact.** A pool's candle is its own execution ratio `amount0/amount1`.
+  A token's is that ratio carried to USD through the OTHER leg, so it is exact
+  against a stablecoin and exact in shape against a volatile one. Pricing a
+  token off its OWN leg yields a flat line at today's price — that mutation is
+  covered by a test.
+- **What is not.** Value locked is not in the trades. Each day records it while
+  it is today; a day that passed before the series existed reports `""`, never
+  `"0.00"` (`fmtHeld`) — zero would draw a cliff to no liquidity.
+- **Write only what moved.** A pass recomputes the whole history every 30s;
+  `idx.written` remembers each cell as persisted so the steady state is one
+  write per subject that traded. Rewriting everything is the O(rows) storm that
+  once stopped this pass from finishing.
+- Rows are entities (`storage.TokenDay` / `PoolDay` / `FactoryDay`) built from
+  the `engine` structs, so the json tags ARE the wire. `Store.Entities` reads a
+  whole type then filters/orders/limits — a SQL LIMIT before the filter would
+  answer with the first N rows rather than the first N matches.
+- **The client draws nothing under three points**; fewer renders "Missing chart
+  data", the same as an error. `pairDayDatas` and the hour series stay stubs —
+  no client asks for them.
+
+`where` learned two things a chart needs: a filter naming a reference
+(`{token: "0x…"}`) compares against the referenced entity's `id`, and an exact
+text match ignores case, because an address arrives checksummed as often as
+lower-cased.
+
 ## DEX indexing has TWO orthogonal sources (EVM 0x9999 logs + native D-Chain CLOB)
 
 The `dex` subgraph (markets/fills/orders/orderbook) can be fed from either or both of:
