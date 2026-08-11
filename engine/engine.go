@@ -385,9 +385,19 @@ type field struct {
 	args  map[string]interface{}
 }
 
-// parseTopFields extracts top-level field names from a GraphQL query.
+// parseTopFields extracts the top-level fields of a GraphQL query.
+//
+// A field ends where its own parts end — its arguments, then its selection set
+// — not at a newline. Whitespace between fields is whitespace: a document is
+// the same document pretty-printed or minified, and a client that sends one
+// line is entitled to the same answer as one that sends ten.
+//
+// Splitting on newlines instead made a single-line document parse as ONE field,
+// name taken up to the first paren, and every field after it was dropped
+// without an error. The explore page asks for its bundle, factory, tokens,
+// pools and day series in one document; minified, it would have been answered
+// with the bundle alone and no sign anything was missing.
 func parseTopFields(query string) ([]field, error) {
-	// Strip query { ... } wrapper
 	start := strings.Index(query, "{")
 	end := strings.LastIndex(query, "}")
 	if start == -1 || end == -1 || end <= start {
@@ -400,34 +410,31 @@ func parseTopFields(query string) ([]field, error) {
 	}
 
 	var fields []field
-	// Simple tokenizer: split on top-level field boundaries
-	depth := 0
-	var current strings.Builder
-	for _, ch := range body {
-		switch ch {
-		case '{':
-			depth++
-			current.WriteRune(ch)
-		case '}':
-			depth--
-			current.WriteRune(ch)
-		case '\n', '\r':
-			if depth == 0 {
-				if s := strings.TrimSpace(current.String()); s != "" {
-					if f, err := parseField(s); err == nil {
-						fields = append(fields, f)
-					}
-				}
-				current.Reset()
-			} else {
-				current.WriteRune(ch)
-			}
-		default:
-			current.WriteRune(ch)
+	for i := 0; i < len(body); {
+		if isSpace(body[i]) || body[i] == ',' {
+			i++
+			continue
 		}
-	}
-	if s := strings.TrimSpace(current.String()); s != "" {
-		if f, err := parseField(s); err == nil {
+		fieldStart := i
+		i = skipSpace(body, scanName(body, i))
+		if i < len(body) && body[i] == ':' { // `alias: name`
+			i = skipSpace(body, scanName(body, skipSpace(body, i+1)))
+		}
+		if i < len(body) && body[i] == '(' {
+			closed := findMatchingParen(body, i)
+			if closed <= i {
+				return nil, fmt.Errorf("unclosed arguments")
+			}
+			i = skipSpace(body, closed+1)
+		}
+		if i < len(body) && body[i] == '{' {
+			closed := findMatchingBrace(body, i)
+			if closed <= i {
+				return nil, fmt.Errorf("unclosed selection set")
+			}
+			i = closed + 1
+		}
+		if f, err := parseField(body[fieldStart:i]); err == nil && f.name != "" {
 			fields = append(fields, f)
 		}
 	}
@@ -437,6 +444,51 @@ func parseTopFields(query string) ([]field, error) {
 	}
 
 	return fields, nil
+}
+
+func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+
+// scanName advances past a field or alias name — everything up to the
+// punctuation that can follow one.
+func scanName(s string, i int) int {
+	for i < len(s) && !isSpace(s[i]) && s[i] != '(' && s[i] != '{' && s[i] != ':' && s[i] != ',' {
+		i++
+	}
+	return i
+}
+
+func skipSpace(s string, i int) int {
+	for i < len(s) && isSpace(s[i]) {
+		i++
+	}
+	return i
+}
+
+// findMatchingBrace finds the '}' closing the '{' at pos, respecting nesting
+// and quoted strings.
+func findMatchingBrace(s string, pos int) int {
+	depth := 0
+	inQuote := false
+	for i := pos; i < len(s); i++ {
+		ch := s[i]
+		if ch == '"' && (i == 0 || s[i-1] != '\\') {
+			inQuote = !inQuote
+			continue
+		}
+		if inQuote {
+			continue
+		}
+		switch ch {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 func parseField(s string) (field, error) {
