@@ -53,36 +53,58 @@ func TestDEXFillReachesTheWire(t *testing.T) {
 	}
 
 	var sawTopicFilter bool
-	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			ID     int             `json:"id"`
-			Method string          `json:"method"`
-			Params json.RawMessage `json:"params"`
-		}
-		json.NewDecoder(r.Body).Decode(&req)
-
-		var result interface{}
-		switch req.Method {
+	answer := func(method string, params json.RawMessage) interface{} {
+		switch method {
 		case "eth_blockNumber":
-			result = "0x7"
+			return "0x7"
 		case "eth_getBlockByNumber":
-			result = map[string]interface{}{"hash": "0x" + strings.Repeat("11", 32)}
+			// A header carries the chain-identity hash AND the block's time; the
+			// poller reads both, and a node that served only one would leave every
+			// swap undated.
+			return map[string]interface{}{
+				"hash":      "0x" + strings.Repeat("11", 32),
+				"timestamp": "0x68000000",
+			}
 		case "eth_getLogs":
 			// The pipe only works if the poller ASKS for the DEXFill topic. If it
 			// does not, the log below would still be served here and the test would
 			// pass while production saw nothing — so assert the subscription.
-			if strings.Contains(string(req.Params), indexer.SigDEXFill) {
+			if strings.Contains(string(params), indexer.SigDEXFill) {
 				sawTopicFilter = true
 			}
-			result = []interface{}{fill}
-		default:
-			// Valuation reads chain state (eth_call); it shares only the store and
-			// must not be able to stall the log path.
-			result = "0x"
+			return []interface{}{fill}
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"jsonrpc": "2.0", "id": req.ID, "result": result,
-		})
+		// Valuation reads chain state (eth_call); it shares only the store and
+		// must not be able to stall the log path.
+		return "0x"
+	}
+	// A real node answers a JSON-RPC batch with an array, and the poller reads
+	// block headers in batches. A fake that only understood single calls would
+	// make this test fail for a reason production does not have.
+	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw json.RawMessage
+		json.NewDecoder(r.Body).Decode(&raw)
+		type call struct {
+			ID     int             `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		reply := func(c call) map[string]interface{} {
+			return map[string]interface{}{"jsonrpc": "2.0", "id": c.ID, "result": answer(c.Method, c.Params)}
+		}
+		if len(raw) > 0 && raw[0] == '[' {
+			var batch []call
+			json.Unmarshal(raw, &batch)
+			out := make([]map[string]interface{}, 0, len(batch))
+			for _, c := range batch {
+				out = append(out, reply(c))
+			}
+			json.NewEncoder(w).Encode(out)
+			return
+		}
+		var c call
+		json.Unmarshal(raw, &c)
+		json.NewEncoder(w).Encode(reply(c))
 	}))
 	defer rpc.Close()
 

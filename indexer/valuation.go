@@ -175,9 +175,17 @@ func (idx *Indexer) revalue(parent context.Context) {
 	nativeUSD := idx.publishAnchor(prices)
 
 	// ── Pools: TVL, spot prices, volume ────────────────────────────────
+	//
+	// One read of the swap window, valued once, folded twice: into the running
+	// totals below, and into the day series (series.go). Two questions about the
+	// same trades, one answer about what each trade was worth.
+	trades := idx.valuedTrades(vps, tokens, prices)
 	tokenTVL := map[string]float64{}
+	tokenBal := map[string]float64{}
 	tokenVol := map[string]float64{}
-	poolVol, swapsSeen := idx.valueSwaps(vps, tokens, prices, tokenVol)
+	poolTVL := map[string]float64{}
+	ratio := map[string]float64{}
+	poolVol := valueSwaps(trades, vps, tokenVol)
 
 	var totalTVL, totalVol float64
 	for _, vp := range vps {
@@ -208,6 +216,12 @@ func (idx *Indexer) revalue(parent context.Context) {
 		}
 		if ok1 {
 			tokenTVL[vp.t1] += v1
+		}
+		tokenBal[vp.t0] += vp.bal0
+		tokenBal[vp.t1] += vp.bal1
+		poolTVL[vp.id] = tvl
+		if vp.bal1 > 0 {
+			ratio[vp.id] = vp.bal0 / vp.bal1
 		}
 
 		p.TotalValueLockedUSD = fmtUSD(tvl)
@@ -255,12 +269,25 @@ func (idx *Indexer) revalue(parent context.Context) {
 		TotalVolumeUSD:      fmtUSD(totalVol),
 	})
 
+	// ── The day series: the same trades, grouped by the day they happened ──
+	idx.writeSeries(snapshot{
+		now:      time.Now().Unix(),
+		trades:   trades,
+		prices:   prices,
+		ratio:    ratio,
+		poolTVL:  poolTVL,
+		tokenTVL: tokenTVL,
+		tokenBal: tokenBal,
+		pools:    pools,
+		tokens:   tokens,
+	})
+
 	window := ""
-	if swapsSeen >= maxValuedSwaps {
+	if len(trades) >= maxValuedSwaps {
 		window = fmt.Sprintf(" [volume covers the most recent %d swaps only]", maxValuedSwaps)
 	}
 	idx.logf("[valuation] %d/%d pools valued, %d tokens priced, %d swaps — TVL $%s, volume $%s (%s)%s",
-		len(vps), len(pools), len(prices), swapsSeen, fmtUSD(totalTVL), fmtUSD(totalVol),
+		len(vps), len(pools), len(prices), len(trades), fmtUSD(totalTVL), fmtUSD(totalVol),
 		time.Since(started).Round(time.Millisecond), window)
 }
 
@@ -312,8 +339,12 @@ func (idx *Indexer) readBalances(ctx context.Context, pools map[string]*storage.
 		if !ok {
 			continue
 		}
+		var word string
+		if json.Unmarshal(raw, &word) != nil {
+			continue
+		}
 		dec := decimalsOf(l.token, tokens)
-		bal, ok := decodeBalance(raw, dec)
+		bal, ok := decodeBalance(word, dec)
 		if !ok {
 			continue
 		}
@@ -375,51 +406,37 @@ func priceTokens(vps []valuedPool, tokens map[string]*storage.SeedTokenData) map
 	return prices
 }
 
-// valueSwaps prices the stored swap history and returns per-pool volume,
-// accumulating per-token volume into tokenVol.
+// valueSwaps totals the valued trades into per-pool volume, accumulating
+// per-token volume into tokenVol.
 //
-// It READS a bounded window of the newest swap rows and writes nothing. An earlier cut also wrote each
+// It reads nothing and writes nothing — it folds a stream valuedTrades already
+// built, which the day series folds a second way. An earlier cut wrote each
 // swap's own amountUSD back, which turned one pass into O(swaps) serialized
 // INSERT OR REPLACEs every interval — on a chain with a real trade history the
 // pass never finished, so its chain silently produced no aggregates at all
 // while a quiet chain beside it looked fine. Volume is a per-pool rollup; it
 // belongs on the pool. (Per-swap amountUSD remains "0" — a separate gap, and
 // one that wants the price at the swap's own block, not today's.)
-func (idx *Indexer) valueSwaps(vps []valuedPool, tokens map[string]*storage.SeedTokenData, prices map[string]float64, tokenVol map[string]float64) (map[string]float64, int) {
-	byPool := map[string]*valuedPool{}
-	for i := range vps {
-		byPool[vps[i].id] = &vps[i]
-	}
+func valueSwaps(trades []trade, vps []valuedPool, tokenVol map[string]float64) map[string]float64 {
 	out := map[string]float64{}
 	for _, vp := range vps {
 		out[vp.id] = 0
 	}
-	swaps := idx.store.RecentSwapsRaw(maxValuedSwaps)
-	for _, sw := range swaps {
-		vp := byPool[strings.ToLower(sw.Pool)]
-		if vp == nil {
+	for i := range trades {
+		t := &trades[i]
+		usd, priced := t.usd()
+		if !priced {
 			continue
 		}
-		v0, ok0 := swapLegUSD(sw.Amount0, vp.t0, tokens, prices)
-		v1, ok1 := swapLegUSD(sw.Amount1, vp.t1, tokens, prices)
-		switch {
-		case ok0 && ok1:
-			out[vp.id] += (v0 + v1) / 2 // both legs priced: the mid of the two quotes
-		case ok0:
-			out[vp.id] += v0
-		case ok1:
-			out[vp.id] += v1
-		default:
-			continue
+		out[t.pool] += usd
+		if t.ok0 {
+			tokenVol[t.t0] += t.usd0
 		}
-		if ok0 {
-			tokenVol[vp.t0] += v0
-		}
-		if ok1 {
-			tokenVol[vp.t1] += v1
+		if t.ok1 {
+			tokenVol[t.t1] += t.usd1
 		}
 	}
-	return out, len(swaps)
+	return out
 }
 
 // twoPow255 is the sign boundary of a 256-bit two's-complement word.
@@ -429,7 +446,10 @@ var twoPow255 = new(big.Int).Lsh(big.NewInt(1), 255)
 // high bit is set.
 var twoPow256 = new(big.Int).Lsh(big.NewInt(1), 256)
 
-// swapLegUSD converts one raw swap leg to its absolute USD value.
+// swapLeg decodes one raw swap leg into the absolute amount of the token that
+// changed hands and, when that token has a price, what it was worth. The amount
+// is a fact of the trade and is always returned; priced says whether the USD
+// figure means anything.
 //
 // A stored leg at or above 2^255 is the two's-complement encoding of a NEGATIVE
 // int256 that was persisted through an unsigned decode (the V3 handler's old
@@ -438,20 +458,23 @@ var twoPow256 = new(big.Int).Lsh(big.NewInt(1), 256)
 // difference of two uint112 reserves, which can never reach that magnitude, so
 // the boundary is unambiguous and no re-index is needed to heal rows the old
 // build wrote.
-func swapLegUSD(raw, token string, tokens map[string]*storage.SeedTokenData, prices map[string]float64) (float64, bool) {
-	price, ok := prices[token]
-	if !ok || raw == "" {
-		return 0, false
+func swapLeg(raw, token string, tokens map[string]*storage.SeedTokenData, prices map[string]float64) (amt, usd float64, priced bool) {
+	if raw == "" {
+		return 0, 0, false
 	}
 	n, ok := new(big.Int).SetString(raw, 10)
 	if !ok {
-		return 0, false
+		return 0, 0, false
 	}
 	if n.Cmp(twoPow255) >= 0 {
 		n.Sub(n, twoPow256)
 	}
-	amt := normalize(n.Abs(n), decimalsOf(token, tokens))
-	return amt * price, true
+	amt = normalize(n.Abs(n), decimalsOf(token, tokens))
+	price, ok := prices[token]
+	if !ok {
+		return amt, 0, false
+	}
+	return amt, amt * price, true
 }
 
 // usdLeg values one pool leg, reporting whether the token has a price at all.
@@ -473,10 +496,11 @@ type rpcBatchReq struct {
 	Params  interface{} `json:"params"`
 }
 
-// rpcBatch posts a JSON-RPC batch and returns id → result. Entries that
+// rpcBatch posts a JSON-RPC batch and returns id → raw result. Entries that
 // errored are absent from the map; the caller treats a missing id as "not
-// read" rather than as zero.
-func (idx *Indexer) rpcBatch(ctx context.Context, reqs []rpcBatchReq) (map[int]string, error) {
+// read" rather than as zero. The result stays raw because the two callers ask
+// for different shapes — a balance is a hex word, a header is an object.
+func (idx *Indexer) rpcBatch(ctx context.Context, reqs []rpcBatchReq) (map[int]json.RawMessage, error) {
 	body, err := json.Marshal(reqs)
 	if err != nil {
 		return nil, err
@@ -493,8 +517,8 @@ func (idx *Indexer) rpcBatch(ctx context.Context, reqs []rpcBatchReq) (map[int]s
 	defer resp.Body.Close()
 
 	var out []struct {
-		ID     int    `json:"id"`
-		Result string `json:"result"`
+		ID     int             `json:"id"`
+		Result json.RawMessage `json:"result"`
 		Error  *struct {
 			Message string `json:"message"`
 		} `json:"error"`
@@ -502,9 +526,9 @@ func (idx *Indexer) rpcBatch(ctx context.Context, reqs []rpcBatchReq) (map[int]s
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("rpc batch decode: %w", err)
 	}
-	res := make(map[int]string, len(out))
+	res := make(map[int]json.RawMessage, len(out))
 	for _, r := range out {
-		if r.Error == nil && r.Result != "" {
+		if r.Error == nil && len(r.Result) > 0 && string(r.Result) != "null" {
 			res[r.ID] = r.Result
 		}
 	}
