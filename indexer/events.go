@@ -190,35 +190,7 @@ const (
 // (CLOB) graph schema only ingests genuine fills.
 const LXSettleAddress = "0x0000000000000000000000000000000000009999"
 
-// Known factory addresses per network.
-type NetworkConfig struct {
-	Name         string   `json:"name" yaml:"name"`
-	ChainID      int64    `json:"chainId" yaml:"chain_id"`
-	FactoryV2    string   `json:"factoryV2" yaml:"factory_v2"`
-	FactoryV3    string   `json:"factoryV3" yaml:"factory_v3"`
-	WETH         string   `json:"weth" yaml:"weth"` // wrapped native token
-	StableTokens []string `json:"stableTokens" yaml:"stable_tokens"`
-}
-
-// Lux network configs — same addresses as exchange subgraphs.
-var LuxMainnet = NetworkConfig{
-	Name:      "lux",
-	ChainID:   96369,
-	FactoryV2: "0xD173926A10A0C4eCd3A51B1422270b65Df0551c1",
-	FactoryV3: "0x80bBc7C4C7a59C899D1B37BC14539A22D5830a84",
-	WETH:      "0x4888e4a2ee0f03051c72d2bd3acf755ed3498b3e", // WLUX
-	StableTokens: []string{
-		"0x848Cff46eb323f323b6Bbe1Df274E40793d7f2c2", // LUSD
-	},
-}
-
-var ZooMainnet = NetworkConfig{
-	Name:      "zoo",
-	ChainID:   200200,
-	FactoryV2: "0xF034942c1140125b5c278aE9cEE1B488e915B2FE",
-	FactoryV3: "0x80bBc7C4C7a59C899D1B37BC14539A22D5830a84",
-	WETH:      "0x5491216406daB99b7032b83765F36790E27F8A61", // WLUX
-	StableTokens: []string{
-		"0xb2ee1CE7b84853b83AA08702aD0aD4D79711882D", // LUSDC
-	},
-}
+// Which factories are canonical, and what the native unit is, are properties of
+// the CHAIN being indexed — they arrive in Config, from whoever knows which
+// chain this is. Naming one chain's addresses here would make every other
+// chain quote its neighbour's pools.

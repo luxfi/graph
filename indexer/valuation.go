@@ -73,7 +73,7 @@ const selBalanceOf = "0x70a08231"
 var stableSymbols = map[string]bool{
 	"USDC": true, "USDT": true, "DAI": true, "LUSD": true, "USDS": true,
 	"BUSD": true, "FRAX": true, "TUSD": true, "USDP": true, "PYUSD": true,
-	"USDE": true, "GUSD": true,
+	"USDE": true, "GUSD": true, "ZUSD": true,
 }
 
 // priceRelaxRounds bounds the outward relaxation from the stable anchors. Each
