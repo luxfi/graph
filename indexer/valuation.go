@@ -156,6 +156,24 @@ func (idx *Indexer) revalue(parent context.Context) {
 	}
 	prices := priceTokens(vps, tokens)
 
+	// ── The USD anchor, published in the shape clients read ────────────
+	//
+	// This pass prices every token in USD directly, but the subgraph wire
+	// format has no such field: a client reads a price as the PRODUCT
+	// `token.derivedETH * bundle.ethPriceUSD`. Both were left unwritten, so
+	// every token served an empty derivedETH against a null bundle and the
+	// whole site rendered TVL and volume beside a blank price and a blank
+	// market cap.
+	//
+	// "ETH" is the wire format's name for the chain's own coin — here LUX. So
+	// the bundle carries the native coin's USD price and each token its price
+	// in native units, which multiply back to exactly the USD price computed
+	// above. The wrapped native token quotes 1 by construction.
+	//
+	// Unpriced stays unpriced: no anchor means no bundle and no derivedETH,
+	// never a zero standing in for a number nobody knows.
+	nativeUSD := idx.publishAnchor(prices)
+
 	// ── Pools: TVL, spot prices, volume ────────────────────────────────
 	tokenTVL := map[string]float64{}
 	tokenVol := map[string]float64{}
@@ -207,13 +225,16 @@ func (idx *Indexer) revalue(parent context.Context) {
 
 	// ── Tokens: TVL and volume across every pool holding them ──────────
 	for addr, t := range tokens {
-		tvl, hasTVL := tokenTVL[strings.ToLower(addr)]
-		vol, hasVol := tokenVol[strings.ToLower(addr)]
-		if !hasTVL && !hasVol {
+		low := strings.ToLower(addr)
+		tvl, hasTVL := tokenTVL[low]
+		vol, hasVol := tokenVol[low]
+		price, hasPrice := prices[low]
+		if !hasTVL && !hasVol && !hasPrice {
 			continue
 		}
 		t.TotalValueLockedUSD = fmtUSD(tvl)
 		t.VolumeUSD = fmtUSD(vol)
+		t.DerivedETH = derivedNative(price, nativeUSD, hasPrice)
 		idx.store.SeedToken(addr, t)
 	}
 
@@ -552,6 +573,39 @@ func fmtUSD(v float64) string {
 		return "0.00"
 	}
 	return strconv.FormatFloat(v, 'f', 2, 64)
+}
+
+// publishAnchor writes the native coin's USD price — the anchor every quoted
+// price is read against — and returns it. Zero when no pool connects the native
+// coin to a stable: then nothing is quotable and nothing is published, rather
+// than a bundle of zero that would render every token free.
+func (idx *Indexer) publishAnchor(prices map[string]float64) float64 {
+	usd := prices[idx.native]
+	if usd <= 0 {
+		return 0
+	}
+	idx.store.SeedBundle("1", &storage.SeedBundleData{EthPriceUSD: fmtPrice(usd)})
+	return usd
+}
+
+// derivedNative converts a USD price into the wire's native-denominated one, so
+// that derivedETH * bundle.ethPriceUSD is exactly the USD price again. Empty
+// when either side is unknown — an absent quote, not a zero one.
+func derivedNative(priceUSD, nativeUSD float64, priced bool) string {
+	if !priced || nativeUSD <= 0 {
+		return ""
+	}
+	return fmtPrice(priceUSD / nativeUSD)
+}
+
+// fmtPrice renders a price at full significance. fmtUSD's two decimals are a
+// CURRENCY format and wrong for a price: LUX at $0.00041334 renders as "0.00"
+// there, which reads as free rather than as small.
+func fmtPrice(v float64) string {
+	if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return ""
+	}
+	return strconv.FormatFloat(v, 'g', 12, 64)
 }
 
 // fmtRatio renders a spot price as num/den, matching the Uniswap convention
