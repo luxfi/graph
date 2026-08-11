@@ -198,12 +198,15 @@ type PairDayData struct {
 	TxCount    int64  `json:"dailyTxns"`
 }
 
+// FactoryDayData is the protocol total for one day — the series behind the
+// explore page's TVL and 24h-volume tiles, which ask for it under the v2-era
+// root name `uniswapDayDatas` but read the v3 field names.
 type FactoryDayData struct {
 	ID                  string `json:"id"`
 	Date                int64  `json:"date"`
-	VolumeUSD           string `json:"dailyVolumeUSD"`
-	TotalValueLockedUSD string `json:"totalLiquidityUSD"`
-	TxCount             int64  `json:"dailyTxns"`
+	VolumeUSD           string `json:"volumeUSD"`
+	TotalValueLockedUSD string `json:"tvlUSD"`
+	TxCount             int64  `json:"txCount"`
 }
 
 // Transaction — on-chain transaction

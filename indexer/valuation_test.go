@@ -217,11 +217,11 @@ func mustFloat(t *testing.T, v interface{}) float64 {
 	return f
 }
 
-// TestSwapLegUSD_HealsUnsignedNegativeLeg pins the exact defect that made the
+// TestSwapLeg_HealsUnsignedNegativeLeg pins the exact defect that made the
 // volume rollup report ~$4e72: a V3 Swap emits int256 amounts and one leg of
 // every swap is negative, but the handler decoded them unsigned, persisting
 // ~2^256 instead of a small negative number.
-func TestSwapLegUSD_HealsUnsignedNegativeLeg(t *testing.T) {
+func TestSwapLeg_HealsUnsignedNegativeLeg(t *testing.T) {
 	const token = "0x0000000000000000000000000000000000000001"
 	tokens := map[string]*storage.SeedTokenData{token: {Symbol: "USDC", Decimals: 18}}
 	prices := map[string]float64{token: 1}
@@ -230,7 +230,7 @@ func TestSwapLegUSD_HealsUnsignedNegativeLeg(t *testing.T) {
 	neg := new(big.Int).Mul(big.NewInt(-5), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
 	wrapped := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 256), neg)
 
-	got, ok := swapLegUSD(wrapped.String(), token, tokens, prices)
+	_, got, ok := swapLeg(wrapped.String(), token, tokens, prices)
 	if !ok {
 		t.Fatal("leg must be valued")
 	}
@@ -240,7 +240,7 @@ func TestSwapLegUSD_HealsUnsignedNegativeLeg(t *testing.T) {
 
 	// A plainly-signed leg (what the fixed V3 handler and the V2 handler write)
 	// must value identically.
-	got2, _ := swapLegUSD(neg.String(), token, tokens, prices)
+	_, got2, _ := swapLeg(neg.String(), token, tokens, prices)
 	if math.Abs(got2-5) > 1e-9 {
 		t.Errorf("signed leg = $%v, want $5", got2)
 	}

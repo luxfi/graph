@@ -4,7 +4,9 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -94,10 +96,18 @@ func (s *Store) SeedSwap(id string, d *SeedSwapData) {
 
 // --- Generic entity storage ---
 
+// SetEntity stores an entity. The value is round-tripped through JSON so that
+// what comes back out is what the sqlite backend would hand back — a map keyed
+// by the json tags — whichever backend a build links. A caller that wrote a
+// struct here and read a map there would work against one and not the other.
 func (s *Store) SetEntity(entityType, id string, data interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.generic[entityType+":"+id] = data
+	var v interface{}
+	if j, err := json.Marshal(data); err == nil {
+		json.Unmarshal(j, &v)
+	}
+	s.generic[entityType+":"+id] = v
 }
 
 func (s *Store) GetByType(entityType, id string) (interface{}, error) {
@@ -127,6 +137,21 @@ func (s *Store) ListByType(entityType string, limit int) (interface{}, error) {
 		}
 	}
 	return result, nil
+}
+
+// Entities returns the stored entities of a type, filtered, ordered and cut to
+// limit. See the sqlite backend for why the whole type is read.
+func (s *Store) Entities(entityType string, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := entityType + ":"
+	result := []interface{}{}
+	for k, v := range s.generic {
+		if strings.HasPrefix(k, prefix) {
+			result = append(result, v)
+		}
+	}
+	return page(result, limit, orderBy, orderDirection, where), nil
 }
 
 // --- Block queries ---
@@ -330,16 +355,18 @@ func (s *Store) GetFlashes(_ context.Context, limit int, orderBy, orderDirection
 	return []interface{}{}, nil
 }
 
+// --- Day series --- (see the sqlite backend)
+
 func (s *Store) GetTokenDayDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
-	return []interface{}{}, nil
-}
-func (s *Store) GetPairDayDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
-	return []interface{}{}, nil
+	return s.Entities(TokenDay, limit, orderBy, orderDirection, where)
 }
 func (s *Store) GetPoolDayDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
-	return []interface{}{}, nil
+	return s.Entities(PoolDay, limit, orderBy, orderDirection, where)
 }
 func (s *Store) GetFactoryDayDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
+	return s.Entities(FactoryDay, limit, orderBy, orderDirection, where)
+}
+func (s *Store) GetPairDayDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
 	return []interface{}{}, nil
 }
 func (s *Store) GetPairHourDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {

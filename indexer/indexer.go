@@ -123,6 +123,11 @@ type Indexer struct {
 	// See erc20.go (tokenMeta/seedToken).
 	tokenCache sync.Map
 
+	// written remembers each day cell as it was last persisted, so a pass that
+	// recomputes the whole history writes only the days that actually moved.
+	// Owned by the valuation goroutine (series.go).
+	written map[string]cell
+
 	// genesisHashFn fetches the chain's genesis (block 0) hash. It is a field so
 	// tests can drive the canonicality decision deterministically without a live
 	// RPC; in production it is fetchGenesisHash (eth_getBlockByNumber 0x0). Honors
@@ -300,6 +305,12 @@ func (idx *Indexer) Run(ctx context.Context) error {
 		}()
 	}
 
+	// Swaps an older build stored with a block number where their time belongs
+	// are dated from their block header. It is the whole reason a day series can
+	// cover the history already indexed rather than starting today, and it stops
+	// as soon as every row has a time.
+	go idx.keepSwapTimes(ctx)
+
 	// The valuation pass (valuation.go) derives the USD aggregates from current
 	// on-chain balances. It runs beside the log poller, not inside it: reserves
 	// are chain STATE, events are chain HISTORY, and an idle chain still has
@@ -404,6 +415,12 @@ func knownTopics() []string {
 }
 
 // logEntry is a decoded eth_getLogs result entry.
+//
+// time is when the block was mined, in unix seconds. It is not part of the RPC
+// result — a log says only which block it was in — so the poll reads it from
+// the block header and stamps it here (see stampTimes). Zero means the header
+// was not read, and a handler that needs a time drops the event rather than
+// dating it to 1970.
 type logEntry struct {
 	Address          string   `json:"address"`
 	Topics           []string `json:"topics"`
@@ -412,6 +429,8 @@ type logEntry struct {
 	TransactionHash  string   `json:"transactionHash"`
 	LogIndex         string   `json:"logIndex"`
 	TransactionIndex string   `json:"transactionIndex"`
+
+	time int64
 }
 
 func (idx *Indexer) poll(ctx context.Context) error {
@@ -464,7 +483,12 @@ func (idx *Indexer) poll(ctx context.Context) error {
 		return fmt.Errorf("parse logs: %w", err)
 	}
 
-	// 3. Process each log
+	// 3. Date the logs, then process them. One header read per block in the
+	// batch, before any handler runs: a swap's time is part of the swap, not
+	// something to be reconstructed afterwards.
+	if err := idx.stampTimes(ctx, logs); err != nil {
+		return fmt.Errorf("block times: %w", err)
+	}
 	for i := range logs {
 		idx.processLog(ctx, &logs[i])
 		idx.status.IndexedEvents++
@@ -633,7 +657,8 @@ func (idx *Indexer) handleSwapV2(l *logEntry, blockNum uint64, txHash, logIdx st
 	amount1 := new(big.Int).Sub(amount1In, amount1Out)
 
 	idx.store.SeedSwap(id, &storage.SeedSwapData{
-		Timestamp: int64(blockNum),
+		Timestamp: l.time,
+		Block:     blockNum,
 		Pool:      l.Address,
 		Amount0:   amount0.String(),
 		Amount1:   amount1.String(),
@@ -663,7 +688,8 @@ func (idx *Indexer) handleSwapV3(l *logEntry, blockNum uint64, txHash, logIdx st
 	amount1 := decodeInt256(l.Data, 1)
 
 	idx.store.SeedSwap(id, &storage.SeedSwapData{
-		Timestamp: int64(blockNum),
+		Timestamp: l.time,
+		Block:     blockNum,
 		Pool:      l.Address,
 		Amount0:   amount0.String(),
 		Amount1:   amount1.String(),
@@ -958,7 +984,8 @@ func (idx *Indexer) handleSwapV4(l *logEntry, blockNum uint64, txHash, logIdx st
 	amount1 := decodeInt256(l.Data, 1)
 
 	idx.store.SeedSwap(id, &storage.SeedSwapData{
-		Timestamp: int64(blockNum),
+		Timestamp: l.time,
+		Block:     blockNum,
 		Pool:      poolID,
 		Amount0:   amount0.String(),
 		Amount1:   amount1.String(),

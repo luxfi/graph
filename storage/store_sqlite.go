@@ -178,6 +178,36 @@ func (s *Store) ListByType(entityType string, limit int) (interface{}, error) {
 	return result, nil
 }
 
+// Entities returns the stored entities of a type, filtered, ordered and cut to
+// limit.
+//
+// It reads the whole type where ListByType reads the first `limit` rows: a
+// filter and an order are properties of the WHOLE collection, so a SQL LIMIT
+// applied before them would answer with the first N rows of the table rather
+// than the first N matches — a chart asking for the newest 90 days would get
+// the oldest 90 rows of whatever happened to be stored.
+func (s *Store) Entities(entityType string, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows, err := s.db.Query("SELECT data FROM entities WHERE type=?", entityType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []interface{}{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			continue
+		}
+		var v interface{}
+		if json.Unmarshal([]byte(raw), &v) == nil {
+			result = append(result, v)
+		}
+	}
+	return page(result, limit, orderBy, orderDirection, where), nil
+}
+
 // --- Block queries (stubs) ---
 
 func (s *Store) GetBlock(_ context.Context, id string) (interface{}, error)          { return nil, nil }
@@ -478,16 +508,24 @@ func (s *Store) GetFlashes(_ context.Context, limit int, orderBy, orderDirection
 	return []interface{}{}, nil
 }
 
+// --- Day series ---
+//
+// The indexer writes one row per (subject, UTC day) as an entity; these read
+// them back. Three subjects have readers because three are asked for: a token's
+// candles, a pool's candles, and the protocol total behind the explore tiles.
+// PairDayData and PairHourData are the v2 spellings and no client asks for
+// them.
+
 func (s *Store) GetTokenDayDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
-	return []interface{}{}, nil
-}
-func (s *Store) GetPairDayDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
-	return []interface{}{}, nil
+	return s.Entities(TokenDay, limit, orderBy, orderDirection, where)
 }
 func (s *Store) GetPoolDayDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
-	return []interface{}{}, nil
+	return s.Entities(PoolDay, limit, orderBy, orderDirection, where)
 }
 func (s *Store) GetFactoryDayDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
+	return s.Entities(FactoryDay, limit, orderBy, orderDirection, where)
+}
+func (s *Store) GetPairDayDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
 	return []interface{}{}, nil
 }
 func (s *Store) GetPairHourDatas(_ context.Context, limit int, orderBy, orderDirection string, where map[string]interface{}) (interface{}, error) {
