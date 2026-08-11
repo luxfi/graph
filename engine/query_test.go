@@ -1,6 +1,9 @@
 package engine
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // A document is the same document minified. Splitting top-level fields on
 // newlines answered a one-line query with its FIRST field and dropped the rest
@@ -74,6 +77,10 @@ func TestTopFieldsParseAliasesAndBareFields(t *testing.T) {
 		{`{bundle{ethPriceUSD} factory{id}}`, []string{"bundle", "factory"}},
 		{"{ bundles\n factories }", []string{"bundles", "factories"}},
 		{`{pools(where:{token0:"0x1"}){id token0{id}} swaps(first:1){id}}`, []string{"pools", "swaps"}},
+		// Whitespace is insignificant in GraphQL, including before a field's
+		// own punctuation.
+		{`{bundle (id: "1") { ethPriceUSD } factory (id: "1") { id }}`, []string{"bundle", "factory"}},
+		{`{ mine : pools(first: 1) { id }  theirs : swaps(first: 1) { id } }`, []string{"mine:pools", "theirs:swaps"}},
 	} {
 		got := names(t, c.query)
 		if len(got) != len(c.want) {
@@ -84,6 +91,29 @@ func TestTopFieldsParseAliasesAndBareFields(t *testing.T) {
 			if got[i] != c.want[i] {
 				t.Errorf("%s: field %d = %q, want %q", c.query, i, got[i], c.want[i])
 			}
+		}
+	}
+}
+
+// A parser that cannot advance must say so. Standing still on input it does not
+// understand holds the request open forever rather than answering it — and this
+// is a public endpoint.
+func TestUnparseableQueryIsRefusedNotHung(t *testing.T) {
+	for _, q := range []string{
+		`{bundle(id:"1"}`,    // unclosed arguments
+		`{bundle{id`,         // unclosed selection set
+		`{)}`,                // punctuation where a field belongs
+		`{bundle(id:"1"){id`, // truncated mid-selection
+	} {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			parseTopFields(q)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("parseTopFields(%q) never returned", q)
 		}
 	}
 }

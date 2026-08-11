@@ -434,6 +434,13 @@ func parseTopFields(query string) ([]field, error) {
 			}
 			i = closed + 1
 		}
+		// Every pass must consume something. A scanner that can stand still on
+		// an input it does not understand does not return a wrong answer — it
+		// returns none, forever, holding the request open. This is a public
+		// endpoint; the parser refuses the query instead.
+		if i == fieldStart {
+			return nil, fmt.Errorf("cannot parse field at offset %d", fieldStart)
+		}
 		if f, err := parseField(body[fieldStart:i]); err == nil && f.name != "" {
 			fields = append(fields, f)
 		}
