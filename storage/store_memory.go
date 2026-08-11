@@ -94,6 +94,19 @@ func (s *Store) SeedSwap(id string, d *SeedSwapData) {
 	s.swaps[id] = d
 }
 
+// ValueSwaps writes what each trade was worth onto the stored swap. Callers
+// pass values already formatted, so there is exactly one place that decides how
+// a dollar figure is written.
+func (s *Store) ValueSwaps(usd map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, v := range usd {
+		if sw, ok := s.swaps[id]; ok {
+			sw.AmountUSD = v
+		}
+	}
+}
+
 // --- Generic entity storage ---
 
 // SetEntity stores an entity. The value is round-tripped through JSON so that

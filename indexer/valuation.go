@@ -185,7 +185,9 @@ func (idx *Indexer) revalue(parent context.Context) {
 	tokenVol := map[string]float64{}
 	poolTVL := map[string]float64{}
 	ratio := map[string]float64{}
-	poolVol := valueSwaps(trades, vps, tokenVol)
+	swapUSD := map[string]string{}
+	poolVol := valueSwaps(trades, vps, tokenVol, swapUSD)
+	idx.store.ValueSwaps(swapUSD)
 
 	var totalTVL, totalVol float64
 	for _, vp := range vps {
@@ -407,17 +409,21 @@ func priceTokens(vps []valuedPool, tokens map[string]*storage.SeedTokenData) map
 }
 
 // valueSwaps totals the valued trades into per-pool volume, accumulating
-// per-token volume into tokenVol.
+// per-token volume into tokenVol and each trade's own worth into swapUSD.
 //
-// It reads nothing and writes nothing — it folds a stream valuedTrades already
-// built, which the day series folds a second way. An earlier cut wrote each
-// swap's own amountUSD back, which turned one pass into O(swaps) serialized
-// INSERT OR REPLACEs every interval — on a chain with a real trade history the
-// pass never finished, so its chain silently produced no aggregates at all
-// while a quiet chain beside it looked fine. Volume is a per-pool rollup; it
-// belongs on the pool. (Per-swap amountUSD remains "0" — a separate gap, and
-// one that wants the price at the swap's own block, not today's.)
-func valueSwaps(trades []trade, vps []valuedPool, tokenVol map[string]float64) map[string]float64 {
+// It folds a stream valuedTrades already built, which the day series folds a
+// second way. Two questions about the same trades, one answer about what each
+// trade was worth — so the trades a pool's volume is made of carry the very
+// figures that add up to it, and a swap list can never disagree with the total
+// printed above it.
+//
+// The per-trade figures are collected here and written in one batch by the
+// caller. An earlier cut sent them back one INSERT OR REPLACE at a time; every
+// row committed on its own, the interval was spent waiting on the disk, and on
+// a chain with a real trade history the pass never finished — so that chain
+// silently produced no aggregates at all while a quiet chain beside it looked
+// fine. The cost was the trip, not the writing.
+func valueSwaps(trades []trade, vps []valuedPool, tokenVol map[string]float64, swapUSD map[string]string) map[string]float64 {
 	out := map[string]float64{}
 	for _, vp := range vps {
 		out[vp.id] = 0
@@ -429,6 +435,7 @@ func valueSwaps(trades []trade, vps []valuedPool, tokenVol map[string]float64) m
 			continue
 		}
 		out[t.pool] += usd
+		swapUSD[t.id] = fmtUSD(usd)
 		if t.ok0 {
 			tokenVol[t.t0] += t.usd0
 		}

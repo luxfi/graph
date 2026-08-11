@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/hanzoai/sqlite"
 )
 
 // Store is the unified storage backend backed by SQLite WAL.
@@ -29,11 +29,26 @@ func New(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("storage: mkdir %s: %w", dataDir, err)
 	}
 	dbPath := filepath.Join(dataDir, "graph.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-64000")
+	// Pure-Go SQLite. The C driver this used to load carries its own copy of the
+	// SQLite amalgamation, and anything else in the binary that brings one — a
+	// dependency two hops away is enough — collides with it at link time, which
+	// took the whole repo's tests down on macOS. Settings are the same ones,
+	// spelled the way this driver reads them.
+	db, err := sql.Open("sqlite", "file:"+dbPath+
+		"?_pragma=journal_mode(WAL)"+
+		"&_pragma=busy_timeout(5000)"+
+		"&_pragma=synchronous(NORMAL)"+
+		"&_pragma=cache_size(-64000)")
 	if err != nil {
 		return nil, fmt.Errorf("storage: open %s: %w", dbPath, err)
 	}
-	// WAL mode allows concurrent readers with a single writer.
+	// Write-ahead logging is a property of the file, not of a connection, so it
+	// is set once here rather than handed to every connection that opens. It is
+	// what lets readers keep reading while a pass writes.
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("storage: enable WAL on %s: %w", dbPath, err)
+	}
 	db.SetMaxOpenConns(8)
 	return &Store{dataDir: dataDir, db: db}, nil
 }
@@ -123,6 +138,38 @@ func (s *Store) SeedSwap(id string, d *SeedSwapData) {
 	data, _ := json.Marshal(d)
 	s.db.Exec("INSERT OR REPLACE INTO swaps(id, data, timestamp, pool) VALUES(?, ?, ?, ?)",
 		id, string(data), d.Timestamp, d.Pool)
+}
+
+// ValueSwaps writes what each trade was worth onto the stored swap.
+//
+// One transaction and one prepared statement for the whole batch. Sent through
+// the plain Exec path instead, every row commits on its own and the interval is
+// spent waiting on the disk; a chain with a real trade history never finishes
+// the pass. That cost is why the value used to be dropped on the floor and
+// every swap read back a dollar amount of zero.
+//
+// Callers pass values already formatted, so there is exactly one place that
+// decides how a dollar figure is written.
+func (s *Store) ValueSwaps(usd map[string]string) {
+	if len(usd) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return
+	}
+	stmt, err := tx.Prepare(`UPDATE swaps SET data = json_set(data, '$.amountUSD', ?) WHERE id = ?`)
+	if err != nil {
+		tx.Rollback()
+		return
+	}
+	for id, v := range usd {
+		stmt.Exec(v, id)
+	}
+	stmt.Close()
+	tx.Commit()
 }
 
 // --- Generic entity storage ---

@@ -274,9 +274,17 @@ func TestHandleSwapV3_DecodesSignedAmounts(t *testing.T) {
 	}
 }
 
-// TestRevalue_DoesNotRewriteSwapRows pins the performance defect that wedged a
-// whole chain: valuing must be O(pools) writes, never O(swaps) writes.
-func TestRevalue_DoesNotRewriteSwapRows(t *testing.T) {
+// TestRevalue_ValuesSwapsAndPool pins what a pass owes its reader: the pool's
+// volume, and the trades that volume is made of, carrying the same figures.
+//
+// This used to demand the opposite — that valuing never touch a swap row at all
+// — after a pass that never finished wedged a whole chain. The cost turned out
+// to be the trip rather than the writing: each row went out as its own
+// committed statement. Behind one transaction, fifty thousand rows take a
+// quarter of a second (storage.TestValueSwapsCostIsBounded holds that line), so
+// the rows can carry their value and every trade no longer reads as worthless
+// under a volume figure that says otherwise.
+func TestRevalue_ValuesSwapsAndPool(t *testing.T) {
 	const (
 		usdc = "0x0000000000000000000000000000000000000001"
 		wlux = "0x0000000000000000000000000000000000000003"
@@ -303,10 +311,14 @@ func TestRevalue_DoesNotRewriteSwapRows(t *testing.T) {
 	if got := fmt.Sprint(p.(map[string]interface{})["volumeUSD"]); got != "12.51" {
 		t.Errorf("pool volumeUSD = %q, want 12.51", got)
 	}
-	// The swap row itself is untouched — valuing must not write O(swaps) rows.
-	for _, sw := range s.RecentSwapsRaw(1000) {
-		if sw.AmountUSD != "0" {
-			t.Errorf("valuation must not rewrite swap rows; amountUSD became %q", sw.AmountUSD)
+	// The one trade the volume is made of says the same thing the pool does.
+	swaps := s.RecentSwapsRaw(1000)
+	if len(swaps) != 1 {
+		t.Fatalf("expected the one seeded swap, got %d", len(swaps))
+	}
+	for _, sw := range swaps {
+		if sw.AmountUSD != "12.51" {
+			t.Errorf("swap amountUSD = %q, want 12.51 — the trade must agree with the total above it", sw.AmountUSD)
 		}
 	}
 }
