@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	_ "github.com/hanzoai/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // Store is the unified storage backend backed by SQLite WAL.
@@ -29,16 +29,13 @@ func New(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("storage: mkdir %s: %w", dataDir, err)
 	}
 	dbPath := filepath.Join(dataDir, "graph.db")
-	// Pure-Go SQLite. The C driver this used to load carries its own copy of the
-	// SQLite amalgamation, and anything else in the binary that brings one — a
-	// dependency two hops away is enough — collides with it at link time, which
-	// took the whole repo's tests down on macOS. Settings are the same ones,
-	// spelled the way this driver reads them.
-	db, err := sql.Open("sqlite", "file:"+dbPath+
-		"?_pragma=journal_mode(WAL)"+
-		"&_pragma=busy_timeout(5000)"+
-		"&_pragma=synchronous(NORMAL)"+
-		"&_pragma=cache_size(-64000)")
+	// One SQLite driver, the same one the indexer and the explorer load. It
+	// carries a copy of the C amalgamation, so a second package bringing another
+	// copy — a dependency two hops away is enough — collides at link time and
+	// takes every test in the repo down with it. That is worth knowing before
+	// adding a dependency here; it is what an unused ORM did to this module.
+	db, err := sql.Open("sqlite3", dbPath+
+		"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-64000")
 	if err != nil {
 		return nil, fmt.Errorf("storage: open %s: %w", dbPath, err)
 	}
