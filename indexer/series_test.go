@@ -496,3 +496,34 @@ func TestUndatedSwapIsNotADay(t *testing.T) {
 		}
 	}
 }
+
+// A row's token reference is the token, not a stub of it. A client that selects
+// through it reads the same figures the `tokens` collection serves.
+func TestTokenReferenceCarriesTheToken(t *testing.T) {
+	idx := book(t)
+	history(idx)
+	idx.revalue(context.Background())
+
+	rowsFor := rows(t, idx.store.GetTokenDayDatas, 100, map[string]interface{}{"token": tZOO})
+	tok, _ := rowsFor[0]["token"].(map[string]interface{})
+	if tok == nil {
+		t.Fatal("no token on the row")
+	}
+	live, ok := idx.store.TokensRaw()[tZOO]
+	if !ok {
+		t.Fatal("token absent from the store")
+	}
+	for _, c := range []struct{ field, want string }{
+		{"symbol", live.Symbol},
+		{"derivedETH", live.DerivedETH},
+		{"volumeUSD", live.VolumeUSD},
+		{"totalValueLockedUSD", live.TotalValueLockedUSD},
+	} {
+		if got := fmt.Sprint(tok[c.field]); got != c.want {
+			t.Errorf("token.%s = %q, want %q", c.field, got, c.want)
+		}
+	}
+	if live.DerivedETH == "" {
+		t.Error("this test proves nothing while the token has no price")
+	}
+}

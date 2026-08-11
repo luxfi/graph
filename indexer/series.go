@@ -211,8 +211,8 @@ func (idx *Indexer) writeSeries(s snapshot) {
 			Token:               tokenRef(c.subject, s.tokens),
 			Volume:              fmtAmount(c.volume),
 			VolumeUSD:           fmtUSD(c.volumeUSD),
-			TotalValueLocked:    fmtHeld(c.locked, c.held),
-			TotalValueLockedUSD: fmtHeld(c.lockedUSD, c.held),
+			TotalValueLocked:    held(c.held, fmtAmount(c.locked)),
+			TotalValueLockedUSD: held(c.held, fmtUSD(c.lockedUSD)),
 			PriceUSD:            fmtPrice(c.close),
 			Open:                fmtPrice(c.open),
 			High:                fmtPrice(c.high),
@@ -230,7 +230,7 @@ func (idx *Indexer) writeSeries(s snapshot) {
 			Date:                c.date,
 			Pool:                poolRef(c.subject, s.pools, s.tokens),
 			VolumeUSD:           fmtUSD(c.volumeUSD),
-			TotalValueLockedUSD: fmtHeld(c.lockedUSD, c.held),
+			TotalValueLockedUSD: held(c.held, fmtUSD(c.lockedUSD)),
 			TxCount:             c.txCount,
 			Open:                fmtPrice(c.open),
 			High:                fmtPrice(c.high),
@@ -247,7 +247,7 @@ func (idx *Indexer) writeSeries(s snapshot) {
 			ID:                  dayID(c.subject, c.date),
 			Date:                c.date,
 			VolumeUSD:           fmtUSD(c.volumeUSD),
-			TotalValueLockedUSD: fmtHeld(c.lockedUSD, c.held),
+			TotalValueLockedUSD: held(c.held, fmtUSD(c.lockedUSD)),
 			TxCount:             c.txCount,
 		})
 	}
@@ -338,7 +338,14 @@ func tokenRef(addr string, tokens map[string]*storage.SeedTokenData) *engine.Tok
 	if t == nil {
 		return &engine.Token{ID: addr}
 	}
-	return &engine.Token{ID: addr, Symbol: t.Symbol, Name: t.Name, Decimals: t.Decimals}
+	// The whole token, not a stub of it: a client that selects through the
+	// reference reads the same figures the `tokens` collection serves, rather
+	// than a row claiming this token has never traded.
+	return &engine.Token{
+		ID: addr, Symbol: t.Symbol, Name: t.Name, Decimals: t.Decimals,
+		VolumeUSD: t.VolumeUSD, TotalValueLockedUSD: t.TotalValueLockedUSD,
+		DerivedETH: t.DerivedETH, TxCount: t.TxCount,
+	}
 }
 
 // poolRef is the pool a day belongs to — see tokenRef.
@@ -355,18 +362,18 @@ func poolRef(id string, pools map[string]*storage.SeedPoolData, tokens map[strin
 	}
 }
 
-// fmtHeld renders what was held on a day that recorded it, and nothing at all
+// held reports what was observed on a day that recorded it, and nothing at all
 // on a day that did not.
 //
 // What a pool holds is not in its trades — only the balances say, and they only
 // say what is true now. So a day that passed before this ran has volume and
 // candles it can be shown and no locked value it cannot. "0.00" there would
 // claim the pool was empty, and a chart would draw that claim as a cliff.
-func fmtHeld(v float64, held bool) string {
-	if !held {
+func held(observed bool, v string) string {
+	if !observed {
 		return ""
 	}
-	return fmtUSD(v)
+	return v
 }
 
 // fmtAmount renders a token-denominated quantity at full significance. fmtUSD's
