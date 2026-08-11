@@ -684,6 +684,30 @@ func TestHandleV2_RejectsNonFactory(t *testing.T) {
 	}
 }
 
+// A chain whose factories were never declared must index no AMM at all. The
+// failure this pins down is not a crash: it is a Zoo indexer that quietly
+// adopted Lux's factory address and served Lux's pools as Zoo's.
+func TestUndeclaredFactory_IndexesNothing(t *testing.T) {
+	token0 := "0x0000000000000000000000000000000000000011"
+	token1 := "0x0000000000000000000000000000000000000022"
+	pool := "0x00000000000000000000000000000000000000c3"
+
+	s := newMemSQLiteStore(t)
+	idx := NewWithConfig(Config{RPC: "http://unused"}, s)
+
+	// The address a previous build reached for when none was configured.
+	const otherChainFactory = "0x80bBc7C4C7a59C899D1B37BC14539A22D5830a84"
+	idx.processLog(context.Background(), poolCreatedLog(otherChainFactory, token0, token1, 3000, pool))
+	if p, _ := s.GetPool(nil, pool); p != nil {
+		t.Fatal("an undeclared chain must not adopt another chain's factory")
+	}
+
+	idx.processLog(context.Background(), swapV3Log(pool, token0, "0xspoof", 1000, -2500))
+	if sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil); sw != nil && len(sw.([]interface{})) != 0 {
+		t.Fatalf("a swap from an unregistered pool must not be recorded, got %d", len(sw.([]interface{})))
+	}
+}
+
 func TestHandleV3_RejectsNonFactory(t *testing.T) {
 	const rogue = "0x000000000000000000000000000000000000dEaD"
 	token0 := "0x0000000000000000000000000000000000000011"
