@@ -413,6 +413,12 @@ func TestPoolSeriesAndProtocolTotal(t *testing.T) {
 		t.Errorf("pool row does not carry its pool: %v", day["pool"])
 	}
 
+	// What the pool held on a day that passed before this ran is not in the
+	// trades. Reporting it as $0 would draw a cliff to zero liquidity.
+	if got := fmt.Sprint(day["tvlUSD"]); got != "" {
+		t.Errorf("a past day claims tvlUSD %q; it was never observed", got)
+	}
+
 	// The protocol total behind the explore page's tiles.
 	protocol := rows(t, idx.store.GetFactoryDayDatas, 1000, nil)
 	if len(protocol) < 3 {

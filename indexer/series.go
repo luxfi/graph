@@ -211,8 +211,8 @@ func (idx *Indexer) writeSeries(s snapshot) {
 			Token:               tokenRef(c.subject, s.tokens),
 			Volume:              fmtAmount(c.volume),
 			VolumeUSD:           fmtUSD(c.volumeUSD),
-			TotalValueLocked:    fmtAmount(c.locked),
-			TotalValueLockedUSD: fmtUSD(c.lockedUSD),
+			TotalValueLocked:    fmtHeld(c.locked, c.held),
+			TotalValueLockedUSD: fmtHeld(c.lockedUSD, c.held),
 			PriceUSD:            fmtPrice(c.close),
 			Open:                fmtPrice(c.open),
 			High:                fmtPrice(c.high),
@@ -230,7 +230,7 @@ func (idx *Indexer) writeSeries(s snapshot) {
 			Date:                c.date,
 			Pool:                poolRef(c.subject, s.pools, s.tokens),
 			VolumeUSD:           fmtUSD(c.volumeUSD),
-			TotalValueLockedUSD: fmtUSD(c.lockedUSD),
+			TotalValueLockedUSD: fmtHeld(c.lockedUSD, c.held),
 			TxCount:             c.txCount,
 			Open:                fmtPrice(c.open),
 			High:                fmtPrice(c.high),
@@ -247,7 +247,7 @@ func (idx *Indexer) writeSeries(s snapshot) {
 			ID:                  dayID(c.subject, c.date),
 			Date:                c.date,
 			VolumeUSD:           fmtUSD(c.volumeUSD),
-			TotalValueLockedUSD: fmtUSD(c.lockedUSD),
+			TotalValueLockedUSD: fmtHeld(c.lockedUSD, c.held),
 			TxCount:             c.txCount,
 		})
 	}
@@ -353,6 +353,20 @@ func poolRef(id string, pools map[string]*storage.SeedPoolData, tokens map[strin
 		Token1:  tokenRef(strings.ToLower(p.Token1), tokens),
 		FeeTier: p.FeeTier,
 	}
+}
+
+// fmtHeld renders what was held on a day that recorded it, and nothing at all
+// on a day that did not.
+//
+// What a pool holds is not in its trades — only the balances say, and they only
+// say what is true now. So a day that passed before this ran has volume and
+// candles it can be shown and no locked value it cannot. "0.00" there would
+// claim the pool was empty, and a chart would draw that claim as a cliff.
+func fmtHeld(v float64, held bool) string {
+	if !held {
+		return ""
+	}
+	return fmtUSD(v)
 }
 
 // fmtAmount renders a token-denominated quantity at full significance. fmtUSD's
