@@ -26,9 +26,11 @@ type Status struct {
 	IndexedEvents uint64 `json:"indexedEvents"`
 }
 
-// Config tunes an Indexer. The zero value is valid: PoolManager defaults to the
-// canonical 0x9999 settlement address, FactoryV2/FactoryV3 to the canonical Lux
-// mainnet AMM factories, and StartBlock to 0 (index from genesis).
+// Config tunes an Indexer. PoolManager defaults to the 0x9999 settlement
+// address, which every chain shares, and StartBlock to 0 (index from genesis).
+// FactoryV2, FactoryV3 and Native have no defaults: they differ per chain, and
+// a guess would be a claim that one chain's pools belong to another. Left
+// empty, the matching surface stays empty.
 type Config struct {
 	RPC string
 	// PoolManager is the DEX settlement precompile address (0x9999). Logs from
@@ -49,7 +51,7 @@ type Config struct {
 	// format quotes every token against it — `token.derivedETH` is a price in
 	// native units and `bundle.ethPriceUSD` is what one native unit is worth —
 	// so this address is what makes a price expressible at all. Lower-cased on
-	// construction. Empty => Lux mainnet's.
+	// construction. Empty => no native anchor, so no token quotes a price.
 	Native string
 	// StartBlock is the genesis-relative block to (re)index from. On a clean
 	// chain relaunch the indexer rewinds to this value (see poll's reorg guard).
@@ -140,24 +142,12 @@ func NewWithConfig(cfg Config, store *storage.Store) *Indexer {
 	if pm == "" {
 		pm = LXSettleAddress
 	}
-	fv2 := cfg.FactoryV2
-	if fv2 == "" {
-		fv2 = LuxMainnet.FactoryV2
-	}
-	fv3 := cfg.FactoryV3
-	if fv3 == "" {
-		fv3 = LuxMainnet.FactoryV3
-	}
-	native := cfg.Native
-	if native == "" {
-		native = LuxMainnet.WETH
-	}
 	idx := &Indexer{
 		rpc:         cfg.RPC,
 		poolManager: strings.ToLower(pm),
-		factoryV2:   strings.ToLower(fv2),
-		factoryV3:   strings.ToLower(fv3),
-		native:      strings.ToLower(native),
+		factoryV2:   strings.ToLower(cfg.FactoryV2),
+		factoryV3:   strings.ToLower(cfg.FactoryV3),
+		native:      strings.ToLower(cfg.Native),
 		label:       cfg.Label,
 		startBlock:  cfg.StartBlock,
 		store:       store,
