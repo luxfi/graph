@@ -187,7 +187,7 @@ func (idx *Indexer) revalue(parent context.Context) {
 	ratio := map[string]float64{}
 	swapUSD := map[string]string{}
 	poolVol := valueSwaps(trades, vps, tokenVol, swapUSD)
-	idx.store.ValueSwaps(swapUSD)
+	valuedRows, valuedErr := idx.store.ValueSwaps(swapUSD)
 
 	var totalTVL, totalVol float64
 	for _, vp := range vps {
@@ -288,9 +288,16 @@ func (idx *Indexer) revalue(parent context.Context) {
 	if len(trades) >= maxValuedSwaps {
 		window = fmt.Sprintf(" [volume covers the most recent %d swaps only]", maxValuedSwaps)
 	}
-	idx.logf("[valuation] %d/%d pools valued, %d tokens priced, %d swaps — TVL $%s, volume $%s (%s)%s",
+	// Say what the swap write actually did. A pass that reports its pools and
+	// then writes nothing to the trades underneath them is how a pool came to
+	// claim thousands in volume over a list of swaps each worth zero.
+	priced := fmt.Sprintf(", %d/%d swaps priced", valuedRows, len(swapUSD))
+	if valuedErr != nil {
+		priced = fmt.Sprintf(", SWAP PRICES NOT WRITTEN: %v", valuedErr)
+	}
+	idx.logf("[valuation] %d/%d pools valued, %d tokens priced, %d swaps — TVL $%s, volume $%s%s (%s)%s",
 		len(vps), len(pools), len(prices), len(trades), fmtUSD(totalTVL), fmtUSD(totalVol),
-		time.Since(started).Round(time.Millisecond), window)
+		priced, time.Since(started).Round(time.Millisecond), window)
 }
 
 // readBalances asks each pool's two tokens what the pool holds. One eth_call

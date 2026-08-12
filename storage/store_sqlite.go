@@ -147,26 +147,40 @@ func (s *Store) SeedSwap(id string, d *SeedSwapData) {
 //
 // Callers pass values already formatted, so there is exactly one place that
 // decides how a dollar figure is written.
-func (s *Store) ValueSwaps(usd map[string]string) {
+// It reports how many rows it actually changed. A write that quietly does
+// nothing is the failure this had first: the pass ran, said nothing, and every
+// swap kept reading zero under a pool claiming thousands in volume.
+func (s *Store) ValueSwaps(usd map[string]string) (int64, error) {
 	if len(usd) == 0 {
-		return
+		return 0, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
-		return
+		return 0, fmt.Errorf("begin: %w", err)
 	}
 	stmt, err := tx.Prepare(`UPDATE swaps SET data = json_set(data, '$.amountUSD', ?) WHERE id = ?`)
 	if err != nil {
 		tx.Rollback()
-		return
+		return 0, fmt.Errorf("prepare: %w", err)
 	}
+	var rows int64
 	for id, v := range usd {
-		stmt.Exec(v, id)
+		res, err := stmt.Exec(v, id)
+		if err != nil {
+			stmt.Close()
+			tx.Rollback()
+			return 0, fmt.Errorf("update %s: %w", id, err)
+		}
+		n, _ := res.RowsAffected()
+		rows += n
 	}
 	stmt.Close()
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return rows, nil
 }
 
 // --- Generic entity storage ---

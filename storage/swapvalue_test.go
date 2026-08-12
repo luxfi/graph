@@ -19,7 +19,13 @@ func TestValueSwapsPersists(t *testing.T) {
 	s.SeedSwap("s1", &SeedSwapData{Timestamp: 100, Pool: "0xpool", AmountUSD: "0", Amount0: "5", Sender: "0xabc"})
 	s.SeedSwap("s2", &SeedSwapData{Timestamp: 101, Pool: "0xpool", AmountUSD: "0", Amount0: "7", Sender: "0xdef"})
 
-	s.ValueSwaps(map[string]string{"s1": "12.34", "s2": "56.78"})
+	n, err := s.ValueSwaps(map[string]string{"s1": "12.34", "s2": "56.78"})
+	if err != nil {
+		t.Fatalf("ValueSwaps: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("reported %d rows changed, want 2 — a write that changes nothing must say so", n)
+	}
 
 	for id, want := range map[string]string{"s1": "12.34", "s2": "56.78"} {
 		got, err := s.GetSwap(nil, id)
@@ -78,7 +84,9 @@ func TestValueSwapsEmptyIsInert(t *testing.T) {
 		t.Fatalf("init schema: %v", err)
 	}
 	s.SeedSwap("s1", &SeedSwapData{Timestamp: 100, Pool: "0xpool", AmountUSD: "9.99"})
-	s.ValueSwaps(map[string]string{})
+	if n, err := s.ValueSwaps(map[string]string{}); n != 0 || err != nil {
+		t.Errorf("empty batch reported %d rows, err %v", n, err)
+	}
 
 	got, err := s.GetSwap(nil, "s1")
 	if err != nil {
