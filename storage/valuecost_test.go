@@ -27,7 +27,13 @@ func TestValueSwapsCostIsBounded(t *testing.T) {
 		usd[id] = "1.23"
 	}
 	start := time.Now()
-	s.ValueSwaps(usd)
+	rows, err := s.ValueSwaps(usd)
+	if err != nil {
+		t.Fatalf("ValueSwaps: %v", err)
+	}
+	if rows != int64(n) {
+		t.Errorf("changed %d rows, want %d — a write that misses its rows must say so", rows, n)
+	}
 	took := time.Since(start)
 	t.Logf("valued %d swaps in %v (%.1f µs/swap)", n, took, float64(took.Microseconds())/float64(n))
 	if took > 10*time.Second {
