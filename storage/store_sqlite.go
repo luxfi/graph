@@ -160,23 +160,53 @@ func (s *Store) ValueSwaps(usd map[string]string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("begin: %w", err)
 	}
-	stmt, err := tx.Prepare(`UPDATE swaps SET data = json_set(data, '$.amountUSD', ?) WHERE id = ?`)
+	// The field is edited here rather than by SQLite's json_set: that function
+	// belongs to the JSON1 extension, which this driver's amalgamation is not
+	// always built with. It is present on a developer's machine and absent in
+	// the image, so the statement prepared cleanly in a test and failed on every
+	// pass in production.
+	read, err := tx.Prepare(`SELECT data FROM swaps WHERE id = ?`)
 	if err != nil {
 		tx.Rollback()
-		return 0, fmt.Errorf("prepare: %w", err)
+		return 0, fmt.Errorf("prepare read: %w", err)
 	}
+	defer read.Close()
+	write, err := tx.Prepare(`UPDATE swaps SET data = ? WHERE id = ?`)
+	if err != nil {
+		tx.Rollback()
+		return 0, fmt.Errorf("prepare write: %w", err)
+	}
+	defer write.Close()
+
 	var rows int64
 	for id, v := range usd {
-		res, err := stmt.Exec(v, id)
-		if err != nil {
-			stmt.Close()
+		var raw string
+		if err := read.QueryRow(id).Scan(&raw); err != nil {
+			if err == sql.ErrNoRows {
+				continue // the window moved on; nothing to price
+			}
 			tx.Rollback()
-			return 0, fmt.Errorf("update %s: %w", id, err)
+			return 0, fmt.Errorf("read %s: %w", id, err)
+		}
+		var d SeedSwapData
+		if err := json.Unmarshal([]byte(raw), &d); err != nil {
+			tx.Rollback()
+			return 0, fmt.Errorf("decode %s: %w", id, err)
+		}
+		d.AmountUSD = v
+		next, err := json.Marshal(&d)
+		if err != nil {
+			tx.Rollback()
+			return 0, fmt.Errorf("encode %s: %w", id, err)
+		}
+		res, err := write.Exec(string(next), id)
+		if err != nil {
+			tx.Rollback()
+			return 0, fmt.Errorf("write %s: %w", id, err)
 		}
 		n, _ := res.RowsAffected()
 		rows += n
 	}
-	stmt.Close()
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit: %w", err)
 	}
