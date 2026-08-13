@@ -13,7 +13,12 @@ import (
 	"strings"
 	"sync"
 
-	_ "github.com/mattn/go-sqlite3"
+	// ONE sqlite in this binary. hanzoai/sqlite is the house driver and it
+	// carries the C in hanzoai/csqlite; upstream mattn compiles its own copy of
+	// the same amalgamation, and linking both defines every sqlite3_* symbol and
+	// every cgo trampoline twice. The build failed at link on darwin and only
+	// survived on linux because the platform linker is laxer about it.
+	_ "github.com/hanzoai/sqlite"
 )
 
 // Store is the unified storage backend backed by SQLite WAL.
@@ -34,7 +39,7 @@ func New(dataDir string) (*Store, error) {
 	// copy — a dependency two hops away is enough — collides at link time and
 	// takes every test in the repo down with it. That is worth knowing before
 	// adding a dependency here; it is what an unused ORM did to this module.
-	db, err := sql.Open("sqlite3", dbPath+
+	db, err := sql.Open("sqlite", dbPath+
 		"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-64000")
 	if err != nil {
 		return nil, fmt.Errorf("storage: open %s: %w", dbPath, err)
