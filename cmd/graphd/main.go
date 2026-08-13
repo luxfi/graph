@@ -180,18 +180,18 @@ func main() {
 	// (eth_chainId) so nothing here has a second opinion about which chain it is;
 	// if the node cannot say, the route is not registered and the client keeps
 	// the endpoint it has rather than being handed a list labelled with a guess.
-	if chainID, err := chainIDFromRPC(ctx, *rpcEndpoint); err != nil {
+	if chainID, err := engine.ChainIDFromRPC(ctx, *rpcEndpoint); err != nil {
 		slog.Warn("token list not served: the chain did not identify itself", "err", err)
 	} else {
-		mux.HandleFunc("GET "+prefix+"/swappable_tokens", handleSwappableTokens(store, chainID))
+		mux.HandleFunc("GET "+prefix+"/swappable_tokens", engine.HandleSwappableTokens(store, chainID))
 		slog.Info("token list served", "path", prefix+"/swappable_tokens", "chain", chainID)
 
 		// What a swap would pay, over the same book. QUOTER_V2 is the V3
 		// periphery quoter — an address of a deployed contract, alongside the
 		// factories above, not a switch: a chain without one has no V3 venue to
 		// ask, so those pools go unquoted and the answer says so.
-		q := newQuoter(store, chainID, *rpcEndpoint, os.Getenv("QUOTER_V2"), os.Getenv("WRAPPED_NATIVE"))
-		mux.HandleFunc("POST "+prefix+"/quote", handleQuote(q))
+		q := engine.NewQuoter(store, chainID, *rpcEndpoint, os.Getenv("QUOTER_V2"), os.Getenv("WRAPPED_NATIVE"))
+		mux.HandleFunc("POST "+prefix+"/quote", engine.HandleQuote(q))
 		slog.Info("quotes served", "path", prefix+"/quote", "chain", chainID, "quoter", os.Getenv("QUOTER_V2"))
 	}
 
