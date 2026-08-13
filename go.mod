@@ -6,6 +6,7 @@ require (
 	github.com/hanzoai/csqlite v0.1.2
 	github.com/hanzoai/replicate v0.6.0
 	github.com/luxfi/age v1.4.0
+	golang.org/x/crypto v0.54.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -39,7 +40,6 @@ require (
 	github.com/superfly/ltx v0.5.1 // indirect
 	github.com/tetratelabs/wazero v1.2.1 // indirect
 	github.com/wasilibs/go-re2 v1.3.0 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
