@@ -68,6 +68,20 @@ type Config struct {
 	// native trading source: a D-Chain trade is a consensus state transition, not an
 	// EVM log, so it never appears on the EVM RPC. Empty => EVM-only (unchanged).
 	DexRPC string
+	// GenesisSupply is every native unit minted at block 0, in whole tokens —
+	// 2000000000000 for Lux and for Zoo. It is a fact fixed at genesis, so it
+	// belongs beside the factory addresses rather than being read: the alloc is
+	// not exposed over RPC and summing every account is not a query.
+	//
+	// It is emphatically NOT platform.getCurrentSupply. That is the P-Chain's
+	// own counter, which on Lux reads 13.27 billion against a real supply of
+	// two trillion — a market cap 150 times too small, printed with confidence.
+	GenesisSupply string
+	// Treasury holds what has not been distributed. Its balance is read live,
+	// because the whole point is that it goes down as tokens reach holders: at
+	// genesis it held all 2T, today it holds 994.7B, and the difference is what
+	// actually circulates.
+	Treasury string
 }
 
 // reorgDepth is how far the chain head may legitimately move backwards (deep
@@ -98,15 +112,17 @@ const genesisBlockTag = "0x0"
 
 // Indexer watches an EVM RPC and writes events to storage.
 type Indexer struct {
-	rpc         string
-	poolManager string // lower-cased 0x9999 settlement address
-	factoryV2   string // lower-cased canonical V2 factory (PairCreated trust root)
-	factoryV3   string // lower-cased canonical V3 factory (PoolCreated trust root)
-	native      string // lower-cased wrapped native token — the unit `derivedETH` is denominated in
-	label       string // log prefix identifying this indexer (see Config.Label)
-	startBlock  uint64
-	store       *storage.Store
-	client      *http.Client
+	rpc           string
+	poolManager   string // lower-cased 0x9999 settlement address
+	factoryV2     string // lower-cased canonical V2 factory (PairCreated trust root)
+	factoryV3     string // lower-cased canonical V3 factory (PoolCreated trust root)
+	genesisSupply string // whole native units minted at block 0
+	treasury      string // lower-cased holder of undistributed supply
+	native        string // lower-cased wrapped native token — the unit `derivedETH` is denominated in
+	label         string // log prefix identifying this indexer (see Config.Label)
+	startBlock    uint64
+	store         *storage.Store
+	client        *http.Client
 
 	// clob is the optional native D-Chain CLOB source (clob.go). Non-nil only when
 	// Config.DexRPC is set; Run then drives it in parallel with the EVM poller.
@@ -148,14 +164,16 @@ func NewWithConfig(cfg Config, store *storage.Store) *Indexer {
 		pm = LXSettleAddress
 	}
 	idx := &Indexer{
-		rpc:         cfg.RPC,
-		poolManager: strings.ToLower(pm),
-		factoryV2:   strings.ToLower(cfg.FactoryV2),
-		factoryV3:   strings.ToLower(cfg.FactoryV3),
-		native:      strings.ToLower(cfg.Native),
-		label:       cfg.Label,
-		startBlock:  cfg.StartBlock,
-		store:       store,
+		rpc:           cfg.RPC,
+		poolManager:   strings.ToLower(pm),
+		factoryV2:     strings.ToLower(cfg.FactoryV2),
+		factoryV3:     strings.ToLower(cfg.FactoryV3),
+		native:        strings.ToLower(cfg.Native),
+		genesisSupply: cfg.GenesisSupply,
+		treasury:      strings.ToLower(cfg.Treasury),
+		label:         cfg.Label,
+		startBlock:    cfg.StartBlock,
+		store:         store,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
