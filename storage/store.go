@@ -34,18 +34,20 @@ type SeedBundleData struct {
 }
 
 type SeedTokenData struct {
-	Symbol              string
-	Name                string
-	Decimals            int64
-	// TotalSupply is the contract's own uint256, as text. It is what turns a
-	// price into a fully diluted value; without it a token page can only print
-	// a dash where that belongs.
+	Symbol   string
+	Name     string
+	Decimals int64
+	// TotalSupply is every unit that exists, in WHOLE tokens, as text — an
+	// exact decimal, because a supply reaches 2^256-1 and no float holds it.
+	// Whole rather than base units so a price multiplies it directly: it is
+	// what turns a price into a fully diluted value, and a reader scaling one
+	// source and not another is how a valuation lands 10^18 out.
 	TotalSupply string
 	// Staked is the part of a NATIVE token's supply bonded to a validator, in
 	// whole units. It is the difference between fully diluted value and market
 	// cap: staked units exist but cannot be sold. Empty for ordinary ERC-20s,
 	// which have no such notion.
-	Staked string
+	Staked              string
 	VolumeUSD           string
 	TotalValueLockedUSD string
 	DerivedETH          string
