@@ -1,4 +1,4 @@
-package main
+package engine
 
 import (
 	"bytes"
@@ -66,8 +66,8 @@ func requestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// handleSwappableTokens answers the swap form's token list for one chain.
-func handleSwappableTokens(store *storage.Store, chainID int64) http.HandlerFunc {
+// HandleSwappableTokens answers the swap form's token list for one chain.
+func HandleSwappableTokens(store *storage.Store, chainID int64) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// The client sends the chain it is looking at. Honour it when it does;
 		// this process indexes one chain, so a request for another is a question
@@ -141,7 +141,8 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 // a table keyed by deployment is a second copy of a fact the node already holds,
 // and the whole reason the exchange served Zoo's tokens under Lux's name was two
 // copies of "which chain is this" drifting apart.
-func chainIDFromRPC(ctx context.Context, rpc string) (int64, error) {
+// ChainIDFromRPC asks the chain what it is.
+func ChainIDFromRPC(ctx context.Context, rpc string) (int64, error) {
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}`)
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

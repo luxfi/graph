@@ -1,4 +1,4 @@
-package main
+package engine
 
 import (
 	"encoding/json"
@@ -488,7 +488,7 @@ func (f *fakeChain) quote(sel, args string) (string, bool) {
 
 // ── the endpoint ──────────────────────────────────────────────────────────
 
-func newTestQuoter(t *testing.T, chain *fakeChain) (*quoter, func()) {
+func newTestQuoter(t *testing.T, chain *fakeChain) (*Quoter, func()) {
 	t.Helper()
 	store, err := storage.New(t.TempDir())
 	if err != nil {
@@ -506,15 +506,15 @@ func newTestQuoter(t *testing.T, chain *fakeChain) (*quoter, func()) {
 		store.SeedPool(p.addr, &storage.SeedPoolData{Token0: p.t0, Token1: p.t1, FeeTier: p.fee})
 	}
 	srv := chain.serve()
-	q := newQuoter(store, 96369, srv.URL, fakeQuoter, tokenA)
+	q := NewQuoter(store, 96369, srv.URL, fakeQuoter, tokenA)
 	return q, func() { srv.Close(); store.Close() }
 }
 
-func ask(t *testing.T, q *quoter, body string) (int, *quoteResponse, map[string]any) {
+func ask(t *testing.T, q *Quoter, body string) (int, *quoteResponse, map[string]any) {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/quote", strings.NewReader(body))
-	handleQuote(q)(rec, req)
+	HandleQuote(q)(rec, req)
 
 	var raw map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {

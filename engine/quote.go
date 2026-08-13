@@ -1,4 +1,4 @@
-package main
+package engine
 
 import (
 	"bytes"
@@ -253,7 +253,8 @@ func (r *route) priced() bool {
 
 // ── the quoter ────────────────────────────────────────────────────────────
 
-type quoter struct {
+// Quoter prices a swap over the indexed book.
+type Quoter struct {
 	store    *storage.Store
 	chainID  int64
 	rpc      string
@@ -265,8 +266,11 @@ type quoter struct {
 	venues map[string]string // pool address → "v2"/"v3"; a pool's venue never changes
 }
 
-func newQuoter(store *storage.Store, chainID int64, rpc, quoterV2, wrapped string) *quoter {
-	return &quoter{
+// NewQuoter builds the quote handler over the same store the GraphQL engine
+// reads. Exported because the process that serves production is the explorer,
+// not graphd, and a handler in package main is reachable by neither.
+func NewQuoter(store *storage.Store, chainID int64, rpc, quoterV2, wrapped string) *Quoter {
+	return &Quoter{
 		store:    store,
 		chainID:  chainID,
 		rpc:      rpc,
@@ -277,7 +281,8 @@ func newQuoter(store *storage.Store, chainID int64, rpc, quoterV2, wrapped strin
 	}
 }
 
-func handleQuote(q *quoter) http.HandlerFunc {
+// HandleQuote is the swap form's price endpoint, over the same book.
+func HandleQuote(q *Quoter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var req quoteRequest
@@ -296,7 +301,7 @@ func badQuote(w http.ResponseWriter, detail string) {
 	})
 }
 
-func (q *quoter) serve(ctx context.Context, w http.ResponseWriter, req *quoteRequest) {
+func (q *Quoter) serve(ctx context.Context, w http.ResponseWriter, req *quoteRequest) {
 	// EXACT_INPUT is the default because it is the question the swap form asks
 	// almost always: here is what I have, what do I get.
 	tradeType := "EXACT_INPUT"
@@ -396,7 +401,7 @@ func noRoute(chainID int64, req *quoteRequest, tradeType, swapper string, slippa
 
 // best searches the indexed book for the route that pays most (or, for an exact
 // output, costs least) and returns it fully priced, or nil when none is.
-func (q *quoter) best(ctx context.Context, in, out string, amount *big.Int, tradeType string) *route {
+func (q *Quoter) best(ctx context.Context, in, out string, amount *big.Int, tradeType string) *route {
 	pools := q.book()
 	if len(pools) == 0 {
 		return nil
@@ -447,7 +452,7 @@ func (q *quoter) best(ctx context.Context, in, out string, amount *big.Int, trad
 
 // book reads every indexed pool into the routing graph. A pool with a malformed
 // address or a missing side cannot be crossed and is left out.
-func (q *quoter) book() []*pool {
+func (q *Quoter) book() []*pool {
 	raw := q.store.PoolsRaw()
 	out := make([]*pool, 0, len(raw))
 	for addr, p := range raw {
@@ -537,7 +542,7 @@ func routes(pools []*pool, in, out string) []*route {
 // as 3000 whether or not that is what it charges. So the pool is asked directly
 // — getReserves answers on a pair, slot0 on a pool, and the one that answers is
 // the one it is. A venue never changes, so this is asked once per pool.
-func (q *quoter) classify(ctx context.Context, pools []*pool) error {
+func (q *Quoter) classify(ctx context.Context, pools []*pool) error {
 	var unknown []*pool
 	q.mu.Lock()
 	for _, p := range pools {
@@ -582,7 +587,7 @@ func (q *quoter) classify(ctx context.Context, pools []*pool) error {
 
 // priceReady prices every leg whose input amount is now known, in one batch, and
 // carries each answer to the leg that follows it.
-func (q *quoter) priceReady(ctx context.Context, candidates []*route, exactIn bool) error {
+func (q *Quoter) priceReady(ctx context.Context, candidates []*route, exactIn bool) error {
 	var ready []*leg
 	for _, c := range candidates {
 		for _, l := range c.legs {
@@ -640,7 +645,7 @@ func (l *leg) done() bool { return l.amtIn != nil && l.amtOut != nil }
 // legCalls builds the calls one leg needs: the quote itself, then the marginal
 // reference. A V2 pair needs only its reserves — both numbers fall out of the
 // same two integers, computed here.
-func (q *quoter) legCalls(l *leg, exactIn bool) []ethCall {
+func (q *Quoter) legCalls(l *leg, exactIn bool) []ethCall {
 	if l.p.venue == "v2" {
 		return []ethCall{{To: l.p.addr, Data: selGetReserves}}
 	}
@@ -823,7 +828,7 @@ func ratio(num, den *big.Int) float64 {
 // decorate reads the price state of the pools the winning route crosses, and the
 // block it all was read at, in one trip. Only the winner is asked: what a route
 // that lost looked like is not in the answer.
-func (q *quoter) decorate(ctx context.Context, r *route) uint64 {
+func (q *Quoter) decorate(ctx context.Context, r *route) uint64 {
 	var reqs []rpcRequest
 	type at struct {
 		l    *leg
@@ -863,7 +868,7 @@ func (q *quoter) decorate(ctx context.Context, r *route) uint64 {
 	return n.Uint64()
 }
 
-func (q *quoter) render(req *quoteRequest, r *route, tradeType, swapper string, slippage float64, head uint64) classicQuote {
+func (q *Quoter) render(req *quoteRequest, r *route, tradeType, swapper string, slippage float64, head uint64) classicQuote {
 	// One read of the token table for the whole answer: it is a scan, and the
 	// route asks about the same handful of tokens several times over.
 	rows := q.tokens()
@@ -941,7 +946,7 @@ func (l *leg) render(in, out tokenJSON) hopJSON {
 // key is folded here rather than hoped about at each call site.
 type tokenTable map[string]*storage.SeedTokenData
 
-func (q *quoter) tokens() tokenTable {
+func (q *Quoter) tokens() tokenTable {
 	rows := q.store.TokensRaw()
 	out := make(tokenTable, len(rows))
 	for addr, t := range rows {
@@ -975,7 +980,7 @@ func (t tokenTable) symbol(addr string) string {
 
 // unwrapNative maps the native sentinel onto the wrapped token that the pools
 // actually hold.
-func (q *quoter) unwrapNative(addr string) string {
+func (q *Quoter) unwrapNative(addr string) string {
 	a := strings.ToLower(addr)
 	if a == nativeSentinel && q.wrapped != "" {
 		return q.wrapped
@@ -1016,7 +1021,7 @@ func ethCallReq(id int, to, data string) rpcRequest {
 }
 
 // call runs a batch of eth_calls at head and returns each result positionally.
-func (q *quoter) call(ctx context.Context, calls []ethCall) ([]string, error) {
+func (q *Quoter) call(ctx context.Context, calls []ethCall) ([]string, error) {
 	reqs := make([]rpcRequest, len(calls))
 	for i, c := range calls {
 		reqs[i] = ethCallReq(i, c.To, c.Data)
@@ -1030,7 +1035,7 @@ func (q *quoter) call(ctx context.Context, calls []ethCall) ([]string, error) {
 // does not do that" is exactly how a pool's venue is settled. A batch that does
 // not come back at all is an error, because then nothing is known and an empty
 // result would be read as a revert that never happened.
-func (q *quoter) batch(ctx context.Context, reqs []rpcRequest) ([]string, error) {
+func (q *Quoter) batch(ctx context.Context, reqs []rpcRequest) ([]string, error) {
 	out := make([]string, len(reqs))
 	if len(reqs) == 0 {
 		return out, nil
