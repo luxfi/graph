@@ -178,6 +178,18 @@ func main() {
 
 	mux.HandleFunc("GET "+prefix+"/graphql", eng.HandleGraphiQL)
 
+	// The swap form's token list, served from the table this process indexes
+	// rather than from a forwarder in front of it. The chain answers for itself
+	// (eth_chainId) so nothing here has a second opinion about which chain it is;
+	// if the node cannot say, the route is not registered and the client keeps
+	// the endpoint it has rather than being handed a list labelled with a guess.
+	if chainID, err := chainIDFromRPC(ctx, *rpcEndpoint); err != nil {
+		slog.Warn("token list not served: the chain did not identify itself", "err", err)
+	} else {
+		mux.HandleFunc("GET "+prefix+"/swappable_tokens", handleSwappableTokens(store, chainID))
+		slog.Info("token list served", "path", prefix+"/swappable_tokens", "chain", chainID)
+	}
+
 	// /ql — canonical short alias for /graphql. Same payload shape, less typing.
 	// Short-alias convention: /v1/graph/ql.
 	mux.HandleFunc("POST "+prefix+"/ql", func(w http.ResponseWriter, r *http.Request) {
