@@ -3,8 +3,8 @@ module github.com/luxfi/graph
 go 1.26.5
 
 require (
+	github.com/hanzoai/csqlite v0.1.2
 	github.com/hanzoai/replicate v0.6.0
-	github.com/hanzoai/sqlite v0.5.4
 	github.com/luxfi/age v1.4.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -15,11 +15,10 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
 	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518 // indirect
 	github.com/hablullah/go-hijri v1.0.2 // indirect
 	github.com/hablullah/go-juliandays v1.0.0 // indirect
-	github.com/hanzoai/csqlite v0.1.2 // indirect
-	github.com/hanzoai/sqlcipher v0.1.1 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/jalaali/go-jalaali v0.0.0-20210801064154-80525e88d958 // indirect
 	github.com/kr/text v0.2.0 // indirect
