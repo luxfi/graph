@@ -196,6 +196,7 @@ func (s *Store) GetToken(_ context.Context, addr string) (interface{}, error) {
 			"id": addr, "symbol": t.Symbol, "name": t.Name, "decimals": t.Decimals,
 			"volumeUSD": t.VolumeUSD, "totalValueLockedUSD": t.TotalValueLockedUSD,
 			"derivedETH": t.DerivedETH, "txCount": t.TxCount,
+			"totalSupply": t.TotalSupply,
 		}, nil
 	}
 	return nil, nil
@@ -210,6 +211,7 @@ func (s *Store) GetTokens(_ context.Context, limit int, orderBy, orderDirection 
 			"id": addr, "symbol": t.Symbol, "name": t.Name, "decimals": t.Decimals,
 			"volumeUSD": t.VolumeUSD, "totalValueLockedUSD": t.TotalValueLockedUSD,
 			"derivedETH": t.DerivedETH, "txCount": t.TxCount,
+			"totalSupply": t.TotalSupply,
 		})
 	}
 	result = FilterResults(result, where)

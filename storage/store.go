@@ -37,6 +37,10 @@ type SeedTokenData struct {
 	Symbol              string
 	Name                string
 	Decimals            int64
+	// TotalSupply is the contract's own uint256, as text. It is what turns a
+	// price into a fully diluted value; without it a token page can only print
+	// a dash where that belongs.
+	TotalSupply         string
 	VolumeUSD           string
 	TotalValueLockedUSD string
 	DerivedETH          string
