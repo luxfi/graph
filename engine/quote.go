@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -257,10 +256,9 @@ func (r *route) priced() bool {
 type Quoter struct {
 	store    *storage.Store
 	chainID  int64
-	rpc      string
+	node     *node
 	quoterV2 string // the V3 periphery quoter; empty when the chain has no V3 venue
 	wrapped  string // wrapped native, lower-cased
-	client   *http.Client
 
 	mu     sync.Mutex
 	venues map[string]string // pool address → "v2"/"v3"; a pool's venue never changes
@@ -273,10 +271,9 @@ func NewQuoter(store *storage.Store, chainID int64, rpc, quoterV2, wrapped strin
 	return &Quoter{
 		store:    store,
 		chainID:  chainID,
-		rpc:      rpc,
+		node:     dial(rpc),
 		quoterV2: strings.ToLower(strings.TrimSpace(quoterV2)),
 		wrapped:  strings.ToLower(strings.TrimSpace(wrapped)),
-		client:   &http.Client{Timeout: quoteBudget},
 		venues:   map[string]string{},
 	}
 }
@@ -563,7 +560,7 @@ func (q *Quoter) classify(ctx context.Context, pools []*pool) error {
 			ethCall{To: p.addr, Data: selGetReserves},
 			ethCall{To: p.addr, Data: selSlot0})
 	}
-	res, err := q.call(ctx, calls)
+	res, err := q.node.call(ctx, calls)
 	if err != nil {
 		return err // the node did not answer; nothing is learned, nothing recorded
 	}
@@ -615,7 +612,7 @@ func (q *Quoter) priceReady(ctx context.Context, candidates []*route, exactIn bo
 		index[i] = [2]int{len(calls), len(c)}
 		calls = append(calls, c...)
 	}
-	res, err := q.call(ctx, calls)
+	res, err := q.node.call(ctx, calls)
 	if err != nil {
 		return err
 	}
@@ -847,7 +844,7 @@ func (q *Quoter) decorate(ctx context.Context, r *route) uint64 {
 	headAt := len(reqs)
 	reqs = append(reqs, rpcRequest{JSONRPC: "2.0", ID: headAt, Method: "eth_blockNumber", Params: []any{}})
 
-	res, err := q.batch(ctx, reqs)
+	res, err := q.node.batch(ctx, reqs)
 	if err != nil {
 		return 0
 	}
@@ -998,80 +995,8 @@ func echoToken(addr string) string {
 	return checksumAddress(addr)
 }
 
-// ── the node ──────────────────────────────────────────────────────────────
-
 // wordHex is the length of one ABI word rendered as hex characters.
 const wordHex = 64
-
-type ethCall struct {
-	To   string
-	Data string
-}
-
-type rpcRequest struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      int    `json:"id"`
-	Method  string `json:"method"`
-	Params  []any  `json:"params"`
-}
-
-func ethCallReq(id int, to, data string) rpcRequest {
-	return rpcRequest{JSONRPC: "2.0", ID: id, Method: "eth_call",
-		Params: []any{map[string]string{"to": to, "data": data}, "latest"}}
-}
-
-// call runs a batch of eth_calls at head and returns each result positionally.
-func (q *Quoter) call(ctx context.Context, calls []ethCall) ([]string, error) {
-	reqs := make([]rpcRequest, len(calls))
-	for i, c := range calls {
-		reqs[i] = ethCallReq(i, c.To, c.Data)
-	}
-	return q.batch(ctx, reqs)
-}
-
-// batch sends one JSON-RPC batch and returns each result positionally by id.
-//
-// A call that reverted comes back empty, and that is an answer — "this contract
-// does not do that" is exactly how a pool's venue is settled. A batch that does
-// not come back at all is an error, because then nothing is known and an empty
-// result would be read as a revert that never happened.
-func (q *Quoter) batch(ctx context.Context, reqs []rpcRequest) ([]string, error) {
-	out := make([]string, len(reqs))
-	if len(reqs) == 0 {
-		return out, nil
-	}
-	body, err := json.Marshal(reqs)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, q.rpc, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := q.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("rpc: %s", resp.Status)
-	}
-
-	var results []struct {
-		ID     int    `json:"id"`
-		Result string `json:"result"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, err
-	}
-	for _, r := range results {
-		if r.ID >= 0 && r.ID < len(out) {
-			out[r.ID] = r.Result
-		}
-	}
-	return out, nil
-}
 
 // ── ABI ───────────────────────────────────────────────────────────────────
 
