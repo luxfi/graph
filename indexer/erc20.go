@@ -24,8 +24,8 @@ import (
 // block for chain-identity probing — an eth_call of a token contract at head
 // is a normal, cheap read and is cached one-per-token below.)
 const (
-	selSymbol   = "0x95d89b41"
-	selName     = "0x06fdde03"
+	selSymbol      = "0x95d89b41"
+	selName        = "0x06fdde03"
 	selDecimals    = "0x313ce567"
 	selTotalSupply = "0x18160ddd"
 )
@@ -33,51 +33,191 @@ const (
 // defaultDecimals is the ERC20 default when decimals() is absent or reverts.
 const defaultDecimals = 18
 
-// tokenMeta resolves (and memoises) the ERC20 metadata for a token address.
-// It is the single source of truth for symbol/name/decimals enrichment: every
-// pool/pair/transfer handler routes its token writes through seedToken, which
-// calls this once per address for the lifetime of the process.
+// unread marks a decimals field the contract has not answered, so a read that
+// said nothing is distinguishable from one that said zero. It never leaves this
+// file: resolve turns it into the ERC20 default.
+const unread = -1
+
+// token answers what a token is, and records the answer. It is the ONE place
+// every pool/pair/transfer handler routes token identity through, so those
+// handlers stay in their lane and no other code decides what a token is called
+// or what its supply is.
 //
-// Caching is mandatory, not an optimisation: Transfer fires on every transfer
-// and PairCreated/PoolCreated re-reference the same tokens, so an un-cached
-// read would issue three eth_calls per token *per log* — a per-block RPC storm
-// against the chain. The cache collapses that to three eth_calls the first
-// time a token is seen and zero thereafter; reverting/non-compliant tokens are
-// cached as a placeholder so they are likewise probed only once.
-func (idx *Indexer) tokenMeta(ctx context.Context, addr string) *storage.SeedTokenData {
+// The store is asked first. Symbol, name and decimals are immutable, so a row
+// that already carries them — and a supply — has nothing left to ask the chain.
+//
+// The chain is asked at most once per address for the life of the process.
+// Transfer fires on every transfer and the pool handlers re-reference the same
+// pair every block, so an un-memoised read would be four eth_calls per token per
+// LOG — a per-block RPC storm. A contract that reverts is memoised too, so it is
+// probed once and not again.
+func (idx *Indexer) token(ctx context.Context, addr string) *storage.SeedTokenData {
 	key := strings.ToLower(addr)
 	if v, ok := idx.tokenCache.Load(key); ok {
 		return v.(*storage.SeedTokenData)
 	}
-
-	meta := idx.readERC20(ctx, addr)
+	stored := idx.storedToken(addr)
+	if settled(stored, addr) {
+		v, _ := idx.tokenCache.LoadOrStore(key, stored)
+		return v.(*storage.SeedTokenData)
+	}
+	t := resolve(stored, idx.readERC20(ctx, addr), addr)
 	// LoadOrStore so two goroutines racing the same fresh token converge on one
-	// cached value (handlers run on a single poll goroutine today, but the cache
-	// must not depend on that).
-	actual, _ := idx.tokenCache.LoadOrStore(key, meta)
-	return actual.(*storage.SeedTokenData)
+	// value, and only the winner writes it (handlers run on a single poll
+	// goroutine today, but the cache must not depend on that).
+	v, loaded := idx.tokenCache.LoadOrStore(key, t)
+	if !loaded {
+		idx.store.SeedToken(addr, t)
+	}
+	return v.(*storage.SeedTokenData)
 }
 
-// readERC20 performs the three metadata eth_calls and decodes them, applying
-// graceful fallbacks so a non-compliant or reverting token still yields a sane
-// Token entity (placeholder symbol/name = address, decimals = 18) rather than
-// dropping the token or failing the poll.
-func (idx *Indexer) readERC20(ctx context.Context, addr string) *storage.SeedTokenData {
-	out := &storage.SeedTokenData{
-		Symbol:   shortAddr(addr), // fallbacks, overwritten on a successful read
-		Name:     addr,
-		Decimals: defaultDecimals,
+// settled reports whether a stored row still has something to ask the chain for.
+// A row is settled once it carries a real symbol AND a supply: those are the two
+// figures only the contract can give, and a token page prints a dash where the
+// market cap belongs without the second one.
+//
+// Keying this on the symbol alone is what left every already-indexed token
+// supply-less: the row had a name, so nothing ever asked the contract again.
+func settled(t *storage.SeedTokenData, addr string) bool {
+	return t != nil && !isPlaceholderSymbol(t.Symbol, addr) && t.TotalSupply != ""
+}
+
+// resolve folds a fresh read over what the store already holds, then fills what
+// neither could supply with the ERC20 defaults.
+//
+// A read that says nothing must never erase something already known: symbol()
+// reverts on an RPC blip, and the address placeholder that follows would replace
+// a real symbol on the next restart. It carries the aggregates through for the
+// same reason — value locked, volume, price and trade count are accumulated onto
+// this row by the valuation pass, and a write built from the contract read alone
+// would zero every one of them.
+func resolve(stored, read *storage.SeedTokenData, addr string) *storage.SeedTokenData {
+	out := &storage.SeedTokenData{Decimals: unread}
+	if stored != nil {
+		c := *stored
+		out = &c
 	}
+	if read != nil {
+		if read.Symbol != "" {
+			out.Symbol = read.Symbol
+		}
+		if read.Name != "" {
+			out.Name = read.Name
+		}
+		if read.Decimals != unread {
+			out.Decimals = read.Decimals
+		}
+		if read.TotalSupply != "" {
+			out.TotalSupply = read.TotalSupply
+		}
+	}
+	if out.Symbol == "" {
+		out.Symbol = shortAddr(addr)
+	}
+	if out.Name == "" {
+		out.Name = addr
+	}
+	if out.Decimals == unread {
+		out.Decimals = defaultDecimals
+	}
+	return out
+}
+
+// BackfillTokens asks the chain for what stored Token rows are still missing: a
+// symbol an earlier read never got, a supply a build that never asked for one
+// left empty. It is the cheap, idempotent alternative to a re-sync — a settled
+// row costs nothing, an unsettled one costs four eth_calls, and no block is
+// re-scanned, no cursor rewound, no aggregate touched.
+//
+// Reports how many rows the pass settled. Honors ctx cancellation between rows.
+func (idx *Indexer) BackfillTokens(ctx context.Context) (int, error) {
+	const pageSize = 1 << 20 // GetTokens caps internally; this asks for "all"
+	raw, err := idx.store.GetTokens(ctx, pageSize, "", "", nil)
+	if err != nil {
+		return 0, err
+	}
+	rows, ok := raw.([]interface{})
+	if !ok {
+		return 0, nil
+	}
+	filled := 0
+	for _, r := range rows {
+		if ctx.Err() != nil {
+			return filled, ctx.Err()
+		}
+		m, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		addr, _ := m["id"].(string)
+		if addr == "" || settled(idx.storedToken(addr), addr) {
+			continue
+		}
+		// Count only rows that actually changed: the read may have reverted, and
+		// that token is now memoised and will not be retried this run.
+		if settled(idx.token(ctx, addr), addr) {
+			filled++
+		}
+	}
+	idx.logf("[indexer] token backfill — %d/%d settled", filled, len(rows))
+	return filled, nil
+}
+
+// storedToken loads a token's persisted row, or nil if absent. It carries every
+// field, aggregates included: the row is read back to be written again, and a
+// field dropped here is a field erased on disk.
+func (idx *Indexer) storedToken(addr string) *storage.SeedTokenData {
+	t, err := idx.store.GetToken(nil, addr)
+	if err != nil || t == nil {
+		return nil
+	}
+	m, ok := t.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	return &storage.SeedTokenData{
+		Symbol:              asString(m["symbol"]),
+		Name:                asString(m["name"]),
+		Decimals:            asInt64(m["decimals"]),
+		TotalSupply:         asString(m["totalSupply"]),
+		Staked:              asString(m["staked"]),
+		VolumeUSD:           asString(m["volumeUSD"]),
+		TotalValueLockedUSD: asString(m["totalValueLockedUSD"]),
+		DerivedETH:          asString(m["derivedETH"]),
+		TxCount:             asInt64(m["txCount"]),
+	}
+}
+
+// isPlaceholderSymbol reports whether a stored symbol is the address-derived
+// fallback (shortAddr) rather than a real ERC20 symbol.
+func isPlaceholderSymbol(symbol, addr string) bool {
+	return symbol == "" || strings.EqualFold(symbol, shortAddr(addr))
+}
+
+// shortAddr returns a stable short symbol for an unknown token address. It is
+// the fallback when the chain has no ERC20 symbol()/name() to offer (a revert, a
+// non-compliant contract, or an unreachable RPC).
+func shortAddr(addr string) string {
+	if len(addr) >= 8 {
+		return addr[:8]
+	}
+	return addr
+}
+
+// readERC20 asks a contract what it is: four eth_calls, decoded. Fields the
+// contract did not answer are left empty (decimals: unread) so silence is
+// distinguishable from a real value and resolve can keep what is already known.
+//
+// Decimals is read before supply because it is the scale supply is expressed in.
+func (idx *Indexer) readERC20(ctx context.Context, addr string) *storage.SeedTokenData {
+	out := &storage.SeedTokenData{Decimals: unread}
 
 	if raw, err := idx.erc20Call(ctx, addr, selSymbol); err == nil {
-		if s := decodeERC20String(raw); s != "" {
-			out.Symbol = s
-		}
+		out.Symbol = decodeERC20String(raw)
 	}
 	if raw, err := idx.erc20Call(ctx, addr, selName); err == nil {
-		if s := decodeERC20String(raw); s != "" {
-			out.Name = s
-		}
+		out.Name = decodeERC20String(raw)
 	}
 	if raw, err := idx.erc20Call(ctx, addr, selDecimals); err == nil {
 		if d, ok := decodeERC20Decimals(raw); ok {
@@ -85,12 +225,15 @@ func (idx *Indexer) readERC20(ctx context.Context, addr string) *storage.SeedTok
 		}
 	}
 	// Supply is what turns a price into a valuation. Without it a token page
-	// prints a dash where fully diluted value belongs, however much the asset
-	// trades. It is one more call on a path that already makes three, cached
-	// the same way — and it is read at head, so it follows a mint or a burn.
+	// prints a dash where market cap and fully diluted value belong, however much
+	// the asset trades. It is read at head, so it follows a mint or a burn.
 	if raw, err := idx.erc20Call(ctx, addr, selTotalSupply); err == nil {
 		if n, ok := decodeERC20Uint(raw); ok {
-			out.TotalSupply = n
+			scale := out.Decimals
+			if scale == unread {
+				scale = defaultDecimals
+			}
+			out.TotalSupply = wholeUnits(n, scale)
 		}
 	}
 	return out
@@ -172,18 +315,43 @@ func decodeERC20Decimals(hexStr string) (int64, bool) {
 	return int64(b[31]), true
 }
 
-// decodeERC20Uint decodes a uint256 return value as a decimal string.
-//
-// A string, not a number: a supply is up to 2^256-1, which no float or int64
-// holds, and the client divides it by decimals to display. Passing it through
-// as text keeps every digit the contract gave us.
-func decodeERC20Uint(hexStr string) (string, bool) {
+// decodeERC20Uint decodes a uint256 return value. A supply reaches 2^256-1,
+// which no float or int64 holds, so it stays a big.Int all the way to the text
+// the store keeps.
+func decodeERC20Uint(hexStr string) (*big.Int, bool) {
 	b := hexToBytes(hexStr)
 	if len(b) < 32 {
-		return "", false
+		return nil, false
 	}
-	n := new(big.Int).SetBytes(b[:32])
-	return n.String(), true
+	return new(big.Int).SetBytes(b[:32]), true
+}
+
+// wholeUnits converts a base-unit amount to whole tokens, exactly.
+//
+// One unit for one field: a supply means whole tokens everywhere it is read, so
+// a price multiplies it directly. A contract reports base units and the native
+// coin's genesis figure is already whole, and the conversion belongs here rather
+// than in whoever displays it — a client scaling one and not the other is how a
+// valuation lands 10^18 out.
+//
+// Integer division, not float: float64 runs out of mantissa around 2^53 and a
+// two-trillion-token supply is far past it. The remainder keeps every digit the
+// contract gave.
+func wholeUnits(n *big.Int, decimals int64) string {
+	if n == nil {
+		return ""
+	}
+	if decimals <= 0 {
+		return n.String()
+	}
+	pow := new(big.Int).Exp(big.NewInt(10), big.NewInt(decimals), nil)
+	q, r := new(big.Int).QuoRem(n, pow, new(big.Int))
+	if r.Sign() == 0 {
+		return q.String()
+	}
+	frac := r.String()
+	frac = strings.Repeat("0", int(decimals)-len(frac)) + frac
+	return q.String() + "." + strings.TrimRight(frac, "0")
 }
 
 // --- byte helpers (pure, table-tested) ---
