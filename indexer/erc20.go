@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"encoding/json"
+	"math/big"
 	"strings"
 
 	"github.com/luxfi/graph/storage"
@@ -13,6 +14,7 @@ import (
 //	symbol()   => 0x95d89b41
 //	name()     => 0x06fdde03
 //	decimals() => 0x313ce567
+//	totalSupply() => 0x18160ddd
 //
 // AMM Token entities are token *contracts* (an ERC20 underlying, or the
 // pair/LP token itself, which is also an ERC20 — e.g. "UNI-V2"). The pool
@@ -24,7 +26,8 @@ import (
 const (
 	selSymbol   = "0x95d89b41"
 	selName     = "0x06fdde03"
-	selDecimals = "0x313ce567"
+	selDecimals    = "0x313ce567"
+	selTotalSupply = "0x18160ddd"
 )
 
 // defaultDecimals is the ERC20 default when decimals() is absent or reverts.
@@ -79,6 +82,15 @@ func (idx *Indexer) readERC20(ctx context.Context, addr string) *storage.SeedTok
 	if raw, err := idx.erc20Call(ctx, addr, selDecimals); err == nil {
 		if d, ok := decodeERC20Decimals(raw); ok {
 			out.Decimals = d
+		}
+	}
+	// Supply is what turns a price into a valuation. Without it a token page
+	// prints a dash where fully diluted value belongs, however much the asset
+	// trades. It is one more call on a path that already makes three, cached
+	// the same way — and it is read at head, so it follows a mint or a burn.
+	if raw, err := idx.erc20Call(ctx, addr, selTotalSupply); err == nil {
+		if n, ok := decodeERC20Uint(raw); ok {
+			out.TotalSupply = n
 		}
 	}
 	return out
@@ -158,6 +170,20 @@ func decodeERC20Decimals(hexStr string) (int64, bool) {
 		}
 	}
 	return int64(b[31]), true
+}
+
+// decodeERC20Uint decodes a uint256 return value as a decimal string.
+//
+// A string, not a number: a supply is up to 2^256-1, which no float or int64
+// holds, and the client divides it by decimals to display. Passing it through
+// as text keeps every digit the contract gave us.
+func decodeERC20Uint(hexStr string) (string, bool) {
+	b := hexToBytes(hexStr)
+	if len(b) < 32 {
+		return "", false
+	}
+	n := new(big.Int).SetBytes(b[:32])
+	return n.String(), true
 }
 
 // --- byte helpers (pure, table-tested) ---

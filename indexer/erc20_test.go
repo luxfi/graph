@@ -180,9 +180,12 @@ func TestSeedToken_EnrichesAndCaches(t *testing.T) {
 		t.Errorf("decimals = %v, want 18", m["decimals"])
 	}
 
+	// Four: symbol, name, decimals, totalSupply. The number matters less than
+	// the bound — this is per TOKEN, once, and the loop below is what proves it
+	// never becomes per LOG.
 	callsAfterFirst := atomic.LoadInt32(&fake.calls)
-	if callsAfterFirst != 3 {
-		t.Fatalf("first sight must issue exactly 3 eth_calls (symbol/name/decimals), got %d", callsAfterFirst)
+	if callsAfterFirst != 4 {
+		t.Fatalf("first sight must issue exactly 4 eth_calls (symbol/name/decimals/totalSupply), got %d", callsAfterFirst)
 	}
 
 	// Re-reference the same token many times (as Transfer/Swap handlers do every
@@ -262,8 +265,8 @@ func TestBackfillTokens(t *testing.T) {
 		t.Fatalf("backfill enriched %d, want 1 (only the placeholder)", n)
 	}
 	// The already-good row must not have been probed.
-	if got := atomic.LoadInt32(&fake.calls); got != 3 {
-		t.Fatalf("backfill issued %d eth_calls, want 3 (one placeholder token only)", got)
+	if got := atomic.LoadInt32(&fake.calls); got != 4 {
+		t.Fatalf("backfill issued %d eth_calls, want 4 (one placeholder token only)", got)
 	}
 
 	tok, _ := s.GetToken(nil, placeholder)
