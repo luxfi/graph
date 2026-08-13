@@ -14,6 +14,39 @@ This file (`CLAUDE.md`) is the canonical agent-facing readme; `LLM.md` is a syml
 - `.github/workflows/` — CI surface
 - `docs/` — extended docs (if present)
 
+## A token's `totalSupply` is WHOLE TOKENS, and a named row is not a finished one
+
+Two things about `Token` that a reader has to know before touching `erc20.go`:
+
+- **One unit.** `SeedTokenData.TotalSupply` (and `Staked`) is whole tokens as an
+  exact decimal string, never base units. The contract reports base units and
+  `publishNativeSupply` reports a genesis figure already whole; both land in the
+  same field, and a client that scales one and not the other is a valuation
+  10^18 out. `wholeUnits` does the conversion, with integer division and the
+  remainder — float64 gives up around 2^53, four orders of magnitude below a
+  two-trillion-token supply. The exchange multiplies this by a price directly.
+- **One predicate.** `settled(row, addr)` — a real symbol AND a supply — decides
+  whether a row still has anything to ask the chain. `token()` is the only
+  resolver: store first, contract for the rest, memoised per address for the
+  process, persisted once. `BackfillTokens` asks the same predicate at every
+  start, so a row is completed by starting rather than by remembering a flag.
+  Keying "finished" on the symbol alone is what left every token indexed before
+  v1.2.25 supply-less forever: the row had a name, so nothing asked again, and
+  market cap and fully diluted value printed a dash however much it traded.
+
+`resolve` folds a read over the stored row and never erases: a reverting call
+must not downgrade a real symbol, and `SeedToken` is INSERT OR REPLACE, so a
+write built only from the contract read zeroes the value locked, volume, price
+and trade count the valuation pass put on that same row.
+
+🪤 **The sqlite driver is `hanzoai/csqlite`, opened as `"sqlite3"`.** Not upstream
+mattn (a second copy of the same amalgamation — every `sqlite3_*` symbol twice,
+a link failure on darwin), and not the `hanzoai/sqlite` wrapper, which registers
+the name `"sqlite"` — as does `modernc.org/sqlite`, which arrives here with
+`hanzoai/replicate` next door in `storage`. Two packages under one name is a
+panic in `database/sql` init, before main runs: v1.2.28 through v1.2.30 could
+not start at all.
+
 ## A swap's `timestamp` is a TIME, and the poll is what makes it one
 
 `eth_getLogs` says which block a log was in and never when it was mined. Until
