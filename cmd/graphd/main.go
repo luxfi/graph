@@ -185,6 +185,14 @@ func main() {
 	} else {
 		mux.HandleFunc("GET "+prefix+"/swappable_tokens", handleSwappableTokens(store, chainID))
 		slog.Info("token list served", "path", prefix+"/swappable_tokens", "chain", chainID)
+
+		// What a swap would pay, over the same book. QUOTER_V2 is the V3
+		// periphery quoter — an address of a deployed contract, alongside the
+		// factories above, not a switch: a chain without one has no V3 venue to
+		// ask, so those pools go unquoted and the answer says so.
+		q := newQuoter(store, chainID, *rpcEndpoint, os.Getenv("QUOTER_V2"), os.Getenv("WRAPPED_NATIVE"))
+		mux.HandleFunc("POST "+prefix+"/quote", handleQuote(q))
+		slog.Info("quotes served", "path", prefix+"/quote", "chain", chainID, "quoter", os.Getenv("QUOTER_V2"))
 	}
 
 	// /ql — canonical short alias for /graphql. Same payload shape, less typing.
