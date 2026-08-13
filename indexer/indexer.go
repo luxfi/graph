@@ -347,6 +347,13 @@ func (idx *Indexer) pollGuarded(ctx context.Context) (err error) {
 
 // rpcCall makes a JSON-RPC POST and returns the result field.
 func (idx *Indexer) rpcCall(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+	return idx.rpcCallTo(ctx, idx.rpc, method, params)
+}
+
+// rpcCallTo is rpcCall against a named endpoint. The chain's other chains — the
+// P-Chain, for what is staked — sit beside the EVM one under the same node, and
+// asking them is the same JSON-RPC with a different path.
+func (idx *Indexer) rpcCallTo(ctx context.Context, url, method string, params interface{}) (json.RawMessage, error) {
 	type rpcReq struct {
 		JSONRPC string      `json:"jsonrpc"`
 		Method  string      `json:"method"`
@@ -366,7 +373,7 @@ func (idx *Indexer) rpcCall(ctx context.Context, method string, params interface
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", idx.rpc, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
