@@ -184,6 +184,33 @@ func NewWithConfig(cfg Config, store *storage.Store) *Indexer {
 		},
 	}
 	idx.genesisHashFn = idx.fetchGenesisHash
+
+	// A cursor only means anything for the addresses it was read with. Change
+	// the factory and every event it ever emitted is already behind the cursor,
+	// so the new address is never seen and the old rows stay — the store keeps
+	// answering for a book that is not on this chain. Zoo mainnet sat that way:
+	// its declared factory held no code, the real one had twelve pools, and the
+	// correction alone would have changed nothing because the cursor was at the
+	// tip. So the source is part of the store's identity, exactly as the genesis
+	// hash is part of the chain's, and a change to either rewinds.
+	//
+	// An UNRECORDED source is unknown, not a mismatch. Every store written before
+	// this existed has none, and reading that as "different" would re-read every
+	// chain from genesis the first time this ships — a million blocks on Lux, to
+	// rebuild rows that are already right. Unknown is its own state: adopt the
+	// current set as the store's and drop nothing.
+	fp := strings.ToLower(strings.Join([]string{idx.factoryV2, idx.factoryV3, idx.poolManager, idx.native}, "|"))
+	switch was := store.Source(); {
+	case was == "":
+		store.SetSource(fp)
+	case was != fp:
+		idx.logf("[indexer] source changed (%s -> %s) — re-reading from %d", short(was), short(fp), cfg.StartBlock)
+		if err := store.DropDerived(); err != nil {
+			idx.logf("[indexer] source changed but the old rows would not drop: %v", err)
+		}
+		store.SetSource(fp)
+	}
+
 	idx.lastBlock = idx.store.GetLastBlock()
 	if idx.lastBlock < cfg.StartBlock {
 		idx.lastBlock = cfg.StartBlock
@@ -1084,4 +1111,19 @@ func (idx *Indexer) isPoolManager(addr string) bool {
 func (idx *Indexer) isKnownPool(addr string) bool {
 	p, _ := idx.store.GetPool(nil, strings.ToLower(addr))
 	return p != nil
+}
+
+// short renders a source fingerprint for a log line: the four addresses it
+// joins are 170 characters, and what a reader needs is only that it changed.
+func short(fp string) string {
+	if fp == "" {
+		return "(unrecorded)"
+	}
+	parts := strings.Split(fp, "|")
+	for i, p := range parts {
+		if len(p) > 10 {
+			parts[i] = p[:10]
+		}
+	}
+	return strings.Join(parts, "|")
 }
