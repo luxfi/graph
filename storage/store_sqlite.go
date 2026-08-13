@@ -98,6 +98,44 @@ func (s *Store) SetLastBlock(block uint64) {
 	s.db.Exec("INSERT OR REPLACE INTO meta(key, value) VALUES('lastBlock', ?)", strconv.FormatUint(block, 10))
 }
 
+// SetSource records which addresses the rows below the cursor were built from.
+// Called once the indexer has committed to a set, so a later start can tell
+// whether the cursor it inherits describes the same book.
+func (s *Store) SetSource(fingerprint string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.db.Exec("INSERT OR REPLACE INTO meta(key, value) VALUES('source', ?)", fingerprint)
+}
+
+// Source returns the fingerprint the rows were built from, or "" for a store
+// written before this was recorded — which is indistinguishable from a store
+// built by another set, and is treated as one.
+func (s *Store) Source() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var v string
+	if err := s.db.QueryRow("SELECT value FROM meta WHERE key='source'").Scan(&v); err != nil {
+		return ""
+	}
+	return v
+}
+
+// DropDerived removes everything read off the chain, leaving the file and its
+// schema. Used when the addresses changed under a store: those rows describe a
+// different book, and mixing them with the new one gives an answer that was
+// never true anywhere.
+func (s *Store) DropDerived() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, t := range []string{"factories", "bundles", "tokens", "pools", "swaps", "entities"} {
+		if _, err := s.db.Exec("DELETE FROM " + t); err != nil {
+			return err
+		}
+	}
+	_, err := s.db.Exec("DELETE FROM meta WHERE key='lastBlock'")
+	return err
+}
+
 // GetLastBlock returns the indexer's last processed block.
 func (s *Store) GetLastBlock() uint64 {
 	s.mu.RLock()
