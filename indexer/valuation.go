@@ -173,6 +173,7 @@ func (idx *Indexer) revalue(parent context.Context) {
 	// Unpriced stays unpriced: no anchor means no bundle and no derivedETH,
 	// never a zero standing in for a number nobody knows.
 	nativeUSD := idx.publishAnchor(prices)
+	idx.publishNativeSupply(ctx)
 
 	// ── Pools: TVL, spot prices, volume ────────────────────────────────
 	//
