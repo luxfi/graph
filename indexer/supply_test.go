@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/luxfi/graph/storage"
@@ -107,5 +108,32 @@ func TestNativeSupplySurvivesAStaleCopy(t *testing.T) {
 	}
 	if got.TotalSupply != "2000000000000" {
 		t.Errorf("supply = %q, want the minted 2000000000000 — a copy read before the publish landed on top", got.TotalSupply)
+	}
+}
+
+// Volume for all time is every day added up, not the newest window summed.
+//
+// A pass values a bounded slice of the swap table because that table grows
+// forever. The bound is right for the pass and wrong for the field the wire
+// calls total volume: on a chain with a million swaps it reported the last
+// twelve percent and called it everything. The day rows are written once and
+// kept, so their sum is the whole history at the cost of a row per day.
+func TestFactoryVolumeCountsEveryDay(t *testing.T) {
+	s := newMemSQLiteStore(t)
+	idx := NewWithConfig(Config{RPC: chainAt(t, 1767225600, nil).URL}, s)
+
+	// Three days the indexer has seen, only one of which a recent window covers.
+	for i, v := range []string{"1000.00", "2000.00", "500.00"} {
+		s.SetEntity(storage.FactoryDay, fmt.Sprintf("1-%d", 20000+i), map[string]interface{}{
+			"id": fmt.Sprintf("1-%d", 20000+i), "date": (20000 + i) * 86400, "volumeUSD": v,
+		})
+	}
+
+	got, err := idx.factoryVolume()
+	if err != nil {
+		t.Fatalf("factoryVolume: %v", err)
+	}
+	if got != 3500 {
+		t.Errorf("volume = %v, want 3500 — a day outside the window still traded", got)
 	}
 }
