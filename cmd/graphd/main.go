@@ -183,7 +183,7 @@ func main() {
 	if chainID, err := engine.ChainIDFromRPC(ctx, *rpcEndpoint); err != nil {
 		slog.Warn("token list not served: the chain did not identify itself", "err", err)
 	} else {
-		mux.HandleFunc("GET "+prefix+"/swappable_tokens", engine.HandleSwappableTokens(store, chainID))
+		mux.HandleFunc("GET "+prefix+"/swappable_tokens", engine.HandleSwappableTokens(store, chainID, os.Getenv("COIN"), os.Getenv("WRAPPED_NATIVE")))
 		slog.Info("token list served", "path", prefix+"/swappable_tokens", "chain", chainID)
 
 		// What a swap would pay, over the same book. QUOTER_V2 is the V3
