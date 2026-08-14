@@ -6,6 +6,8 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+
+	"github.com/luxfi/graph/storage"
 )
 
 // What a native token is worth depends on three numbers, and they live in three
@@ -134,7 +136,15 @@ func (idx *Indexer) platformCall(ctx context.Context, url, method string, params
 // Written each pass rather than once: the treasury balance falls as tokens are
 // distributed and the staked figure moves with every delegation, so a value
 // read at boot would be quietly stale within the hour.
-func (idx *Indexer) publishNativeSupply(ctx context.Context) {
+//
+// It writes to the pass's own copy of the row as well as to the store, and that
+// is not belt-and-braces. The pass reads every token into memory at the top and
+// writes those copies back near the end, so a store-only write sits inside a
+// window where a copy read before it lands on top — the coin then reports
+// whatever its wrapper holds wrapped, and Zoo's two trillion showed as the
+// fifteen billion sitting in the contract. Correcting the copy the pass already
+// holds makes the result the same whichever runs last.
+func (idx *Indexer) publishNativeSupply(ctx context.Context, inFlight map[string]*storage.SeedTokenData) {
 	if idx.native == "" {
 		return
 	}
@@ -142,7 +152,10 @@ func (idx *Indexer) publishNativeSupply(ctx context.Context) {
 	if !ok {
 		return
 	}
-	tok := idx.store.TokensRaw()[idx.native]
+	tok := inFlight[idx.native]
+	if tok == nil {
+		tok = idx.store.TokensRaw()[idx.native]
+	}
 	if tok == nil {
 		return
 	}

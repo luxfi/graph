@@ -1,6 +1,11 @@
 package indexer
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/luxfi/graph/storage"
+)
 
 // Circulating is what is left after everything that exists but cannot be sold:
 // what the treasury has not distributed, and what is bonded to a validator. It
@@ -66,5 +71,41 @@ func TestPlatformEndpointDerivesFromEVM(t *testing.T) {
 func TestUnitsAreWrittenPlainly(t *testing.T) {
 	if got := fmtUnits(2_000_000_000_000); got != "2000000000000" {
 		t.Errorf("fmtUnits = %q, want 2000000000000", got)
+	}
+}
+
+// The coin's minted supply survives a copy of its row written after the publish.
+//
+// The valuation pass reads every token into memory at the top and writes those
+// copies back near the end. A supply written only to the store sits inside that
+// window: the copy read before it lands on top, and the chain's own coin then
+// reports whatever its wrapper holds wrapped — Zoo's two trillion showed as the
+// fifteen billion sitting in the contract.
+func TestNativeSupplySurvivesAStaleCopy(t *testing.T) {
+	const wrapper = "0x4888e4a2ee0f03051c72d2bd3acf755ed3498b3e"
+	s := newMemSQLiteStore(t)
+	// The wrapper as the chain reports it: what has actually been wrapped.
+	s.SeedToken(wrapper, &storage.SeedTokenData{
+		Symbol: "WLUX", Name: "Wrapped LUX", Decimals: 18, TotalSupply: "15026903324",
+	})
+	idx := NewWithConfig(Config{
+		RPC:           chainAt(t, 1767225600, nil).URL,
+		Native:        wrapper,
+		GenesisSupply: "2000000000000",
+	}, s)
+
+	// What the pass does: read the rows, publish the supply, write the rows back.
+	inFlight := s.TokensRaw()
+	idx.publishNativeSupply(context.Background(), inFlight)
+	for addr, t := range inFlight {
+		s.SeedToken(addr, t)
+	}
+
+	got := s.TokensRaw()[wrapper]
+	if got == nil {
+		t.Fatal("the wrapper's row vanished")
+	}
+	if got.TotalSupply != "2000000000000" {
+		t.Errorf("supply = %q, want the minted 2000000000000 — a copy read before the publish landed on top", got.TotalSupply)
 	}
 }
