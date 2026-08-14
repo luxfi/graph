@@ -110,8 +110,14 @@ func HandleSwap(chainID int64, router, wrapped string) http.HandlerFunc {
 		tokens := make([]string, 0, len(hops)+1)
 		fees := make([]int64, 0, len(hops))
 		for i, h := range hops {
+			// A fee is a uint24, and the path packs it in exactly three bytes
+			// with an address either side. One that does not fit renders wider,
+			// shifting every byte after it, so the path would name real pools at
+			// addresses nobody asked for. A negative one renders as hex with a
+			// minus in it, which is not a number at all.
 			fee, err := strconv.ParseInt(h.Fee, 10, 64)
-			if h.TokenIn.Address == "" || h.TokenOut.Address == "" || h.Fee == "" || err != nil {
+			if h.TokenIn.Address == "" || h.TokenOut.Address == "" || h.Fee == "" ||
+				err != nil || fee < 0 || fee > 1<<24-1 {
 				badQuote(w, "quote.route hop "+strconv.Itoa(i)+" is missing tokenIn/tokenOut/fee")
 				return
 			}
