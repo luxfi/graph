@@ -306,11 +306,11 @@ func (q *Quoter) serve(ctx context.Context, w http.ResponseWriter, req *quoteReq
 		tradeType = "EXACT_OUTPUT"
 	}
 
-	if !isHexAddress(req.TokenIn) {
+	if !IsAddress(req.TokenIn) {
 		badQuote(w, "tokenIn must be an address")
 		return
 	}
-	if !isHexAddress(req.TokenOut) {
+	if !IsAddress(req.TokenOut) {
 		badQuote(w, "tokenOut must be an address")
 		return
 	}
@@ -338,7 +338,7 @@ func (q *Quoter) serve(ctx context.Context, w http.ResponseWriter, req *quoteReq
 	}
 
 	swapper := nativeSentinel
-	if isHexAddress(req.Swapper) {
+	if IsAddress(req.Swapper) {
 		swapper = checksumAddress(req.Swapper)
 	}
 	slippage := 0.5
@@ -453,7 +453,7 @@ func (q *Quoter) book() []*pool {
 	raw := q.store.PoolsRaw()
 	out := make([]*pool, 0, len(raw))
 	for addr, p := range raw {
-		if p == nil || !isHexAddress(addr) || !isHexAddress(p.Token0) || !isHexAddress(p.Token1) {
+		if p == nil || !IsAddress(addr) || !IsAddress(p.Token0) || !IsAddress(p.Token1) {
 			continue
 		}
 		t0, t1 := strings.ToLower(p.Token0), strings.ToLower(p.Token1)
@@ -1044,7 +1044,10 @@ func bigString(n *big.Int) string {
 
 // ── addresses ─────────────────────────────────────────────────────────────
 
-func isHexAddress(s string) bool {
+// IsAddress reports whether s is a twenty-byte hex address. Exported because
+// the process that mounts these handlers decides whether a chain has a router
+// to address a transaction to, and that question has one answer.
+func IsAddress(s string) bool {
 	if len(s) != 42 || !strings.HasPrefix(s, "0x") {
 		return false
 	}
