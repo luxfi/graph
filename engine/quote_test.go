@@ -269,14 +269,14 @@ func TestParseWei(t *testing.T) {
 }
 
 func TestIsHexAddress(t *testing.T) {
-	if !isHexAddress(tokenA) || !isHexAddress("0x4888E4a2Ee0F03051c72D2BD3ACf755eD3498B3E") {
+	if !IsAddress(tokenA) || !IsAddress("0x4888E4a2Ee0F03051c72D2BD3ACf755eD3498B3E") {
 		t.Error("a 20-byte hex address must be accepted in either case")
 	}
 	for _, bad := range []string{"", "0x", "nothex", "4888e4a2ee0f03051c72d2bd3acf755ed3498b3e",
 		"0x4888e4a2ee0f03051c72d2bd3acf755ed3498b3", "0x4888e4a2ee0f03051c72d2bd3acf755ed3498b3ee",
 		"0xzzzz4a2ee0f03051c72d2bd3acf755ed3498b3e"} {
-		if isHexAddress(bad) {
-			t.Errorf("isHexAddress(%q) accepted", bad)
+		if IsAddress(bad) {
+			t.Errorf("IsAddress(%q) accepted", bad)
 		}
 	}
 }

@@ -91,11 +91,23 @@ func HandleSwap(chainID int64, router, wrapped string) http.HandlerFunc {
 			badQuote(w, "quote.route must contain at least one hop")
 			return
 		}
-		if !isHexAddress(q.Swapper) {
+		if !IsAddress(q.Swapper) {
 			badQuote(w, "quote.swapper must be an address")
 			return
 		}
 		swapper := checksumAddress(q.Swapper)
+
+		// A quote names the chain it was priced on. This process serves one
+		// chain, and building its router call from another chain's quote would
+		// address pools by the same numbers on a book that never quoted them —
+		// which on chains that share deployment addresses is a real trade at a
+		// price nobody was shown. The caller said which chain; believe it, and
+		// refuse when it is not this one.
+		if q.ChainID != 0 && q.ChainID != chainID {
+			badQuote(w, "quote is for chain "+strconv.FormatInt(q.ChainID, 10)+
+				", this one serves "+strconv.FormatInt(chainID, 10))
+			return
+		}
 
 		amountIn, okIn := parseWei(q.Input.Amount)
 		amountOut, okOut := parseWei(q.Output.Amount)
@@ -110,13 +122,14 @@ func HandleSwap(chainID int64, router, wrapped string) http.HandlerFunc {
 		tokens := make([]string, 0, len(hops)+1)
 		fees := make([]int64, 0, len(hops))
 		for i, h := range hops {
-			// A fee is a uint24, and the path packs it in exactly three bytes
-			// with an address either side. One that does not fit renders wider,
-			// shifting every byte after it, so the path would name real pools at
-			// addresses nobody asked for. A negative one renders as hex with a
-			// minus in it, which is not a number at all.
+			// An address is twenty bytes and a fee is a uint24. The path packs
+			// them end to end with nothing marking where one stops, so width is
+			// the only thing that says which is which. Anything narrower or
+			// wider shifts every byte after it and the path still parses — as a
+			// route through pools nobody named. A negative fee renders as hex
+			// with a minus in it, which is not a number at all.
 			fee, err := strconv.ParseInt(h.Fee, 10, 64)
-			if h.TokenIn.Address == "" || h.TokenOut.Address == "" || h.Fee == "" ||
+			if !IsAddress(h.TokenIn.Address) || !IsAddress(h.TokenOut.Address) ||
 				err != nil || fee < 0 || fee > 1<<24-1 {
 				badQuote(w, "quote.route hop "+strconv.Itoa(i)+" is missing tokenIn/tokenOut/fee")
 				return
@@ -128,9 +141,12 @@ func HandleSwap(chainID int64, router, wrapped string) http.HandlerFunc {
 			fees = append(fees, fee)
 		}
 
+		// Slippage is a percentage of the amount, so it lives between none and
+		// all of it. Outside that the factor it becomes goes negative or past
+		// what a word holds, and the bound stops being a bound.
 		slippage := 0.5
 		if q.Slippage != nil {
-			slippage = *q.Slippage
+			slippage = math.Min(100, math.Max(0, *q.Slippage))
 		}
 		exactIn := q.TradeType != "EXACT_OUTPUT"
 
