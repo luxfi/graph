@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/luxfi/graph/storage"
 )
@@ -186,9 +187,9 @@ func TestHealDatesTheHistory(t *testing.T) {
 	})
 	idx := NewWithConfig(Config{RPC: chainAt(t, mined, nil).URL}, s)
 
-	_, left, err := idx.healSwapTimes(context.Background())
-	if err != nil || left != 0 {
-		t.Fatalf("heal left %d rows undated: %v", left, err)
+	found, healed, err := idx.healSwapTimes(context.Background())
+	if err != nil || found != healed {
+		t.Fatalf("heal dated %d of %d rows found: %v", healed, found, err)
 	}
 	got := s.RecentSwapsRaw(10)
 	old := got["0xold#0x1"]
@@ -202,8 +203,8 @@ func TestHealDatesTheHistory(t *testing.T) {
 		t.Errorf("an already-dated row was rewritten: %+v", n)
 	}
 	// Idempotent: a second run has nothing to do and must not re-date anything.
-	if _, left, err := idx.healSwapTimes(context.Background()); left != 0 || err != nil {
-		t.Errorf("second heal reported %d undated rows: %v", left, err)
+	if found, _, err := idx.healSwapTimes(context.Background()); found != 0 || err != nil {
+		t.Errorf("second heal found %d undated rows: %v", found, err)
 	}
 }
 
@@ -232,9 +233,9 @@ func TestHealFindsRowsBuriedUnderDatedOnes(t *testing.T) {
 	}
 	idx := NewWithConfig(Config{RPC: chainAt(t, mined, nil).URL}, s)
 
-	healed, left, err := idx.healSwapTimes(context.Background())
-	if err != nil || left != 0 || healed != 1 {
-		t.Fatalf("heal dated %d rows and left %d undated (%v) — the buried row was not found", healed, left, err)
+	found, healed, err := idx.healSwapTimes(context.Background())
+	if err != nil || found != 1 || healed != 1 {
+		t.Fatalf("heal found %d and dated %d (%v) — the buried row was not found", found, healed, err)
 	}
 	got := s.UndatedSwapsRaw(10)
 	if len(got) != 0 {
@@ -261,5 +262,38 @@ func TestDayStartIsUTCMidnight(t *testing.T) {
 	}
 	if got := dayID("0xABC", midnight); got != "0xabc-20454" {
 		t.Errorf("dayID = %q, want 0xabc-20454", got)
+	}
+}
+
+// A store holds more undated rows than one pass can window, and every one of
+// them has to end up dated.
+//
+// The heal reads a bounded window, so a long history takes several passes. The
+// loop that repeats it must stop when the STORE has nothing left, not when a
+// window does — a window that heals completely has no failures in it, and
+// reading that as "finished" stops after the first 50,000 and leaves the rest
+// exactly as invisible as before.
+func TestHealDrainsEveryWindow(t *testing.T) {
+	const mined = 1767225600 + 7200
+	s := newMemSQLiteStore(t)
+	const rows = maxValuedSwaps + 2500
+	for i := 0; i < rows; i++ {
+		s.SeedSwap(fmt.Sprintf("0xold#%d", i), &storage.SeedSwapData{
+			Timestamp: int64(1 + i%9000), // a block number, as an older build wrote it
+			Pool:      "0xpool", Amount0: "1", Amount1: "-2", AmountUSD: "0",
+		})
+	}
+	idx := NewWithConfig(Config{RPC: chainAt(t, mined, nil).URL}, s)
+
+	keepSwapTimesDone := make(chan struct{})
+	go func() { idx.keepSwapTimes(context.Background()); close(keepSwapTimesDone) }()
+	select {
+	case <-keepSwapTimesDone:
+	case <-time.After(90 * time.Second):
+		t.Fatal("heal never finished draining")
+	}
+
+	if left := len(s.UndatedSwapsRaw(10)); left != 0 {
+		t.Errorf("%d rows still hold a block number after the heal stopped", left)
 	}
 }

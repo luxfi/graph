@@ -117,14 +117,14 @@ func (idx *Indexer) stampTimes(ctx context.Context, logs []logEntry) error {
 }
 
 // healSwapTimes gives stored swaps the real time of their block, and reports
-// how many it dated and how many still lack one.
+// how many rows it found needing one and how many it dated.
 //
 // A row written by an older build holds its block NUMBER in Timestamp and has
 // no Block at all. That is not a guess: no swap is mined in block 0, so an
 // unset Block identifies exactly those rows, and the number it left behind is
 // the very thing needed to look the time up. A row whose supposed block the
 // chain does not answer for is left alone — this heals what it can prove.
-func (idx *Indexer) healSwapTimes(ctx context.Context) (healed, remaining int, err error) {
+func (idx *Indexer) healSwapTimes(ctx context.Context) (found, healed int, err error) {
 	// Asked for by the property that identifies them. This read used to be
 	// RecentSwapsRaw — the newest rows by timestamp — which is the one window an
 	// undated row is never in: it holds a block number, block numbers are small
@@ -143,13 +143,14 @@ func (idx *Indexer) healSwapTimes(ctx context.Context) (healed, remaining int, e
 			blocks = append(blocks, b)
 		}
 	}
-	if len(stale) == 0 {
+	found = len(stale)
+	if found == 0 {
 		return 0, 0, nil
 	}
 
 	times := idx.blockTimes(ctx, blocks)
 	if len(times) == 0 {
-		return 0, len(stale), fmt.Errorf("no block header answered for %d blocks", len(blocks))
+		return found, 0, fmt.Errorf("no block header answered for %d blocks", len(blocks))
 	}
 	for id, sw := range stale {
 		block := uint64(sw.Timestamp)
@@ -162,8 +163,8 @@ func (idx *Indexer) healSwapTimes(ctx context.Context) (healed, remaining int, e
 		idx.store.SeedSwap(id, &next)
 		healed++
 	}
-	idx.logf("[indexer] swap times healed — %d of %d rows dated from their block header", healed, len(stale))
-	return healed, len(stale) - healed, nil
+	idx.logf("[indexer] swap times healed — %d of %d rows dated from their block header", healed, found)
+	return found, healed, nil
 }
 
 // keepSwapTimes runs the heal until no row is left holding a block number where
@@ -176,13 +177,19 @@ func (idx *Indexer) healSwapTimes(ctx context.Context) (healed, remaining int, e
 // past it undated, which is the same invisibility by a smaller margin.
 func (idx *Indexer) keepSwapTimes(ctx context.Context) {
 	for {
-		healed, stale, err := idx.healSwapTimes(ctx)
-		if stale == 0 && err == nil {
+		found, healed, err := idx.healSwapTimes(ctx)
+		// Nothing left holding a block number: the store is whole, and new
+		// swaps arrive already dated. Done — and this is the ONLY way out.
+		if found == 0 && err == nil {
 			return
 		}
 		if err != nil {
-			idx.logf("[indexer] swap times: %v (%d rows still undated)", err, stale)
+			idx.logf("[indexer] swap times: %v (%d rows found undated)", err, found)
 		}
+		// A pass covers one window. Progress means there is very likely another
+		// window behind it, so go straight on. Stopping on "this window has no
+		// failures left" is stopping when the window is DONE rather than when
+		// the store is — one window of 50,000 dated and 862,492 left behind.
 		if healed > 0 && err == nil {
 			continue
 		}
