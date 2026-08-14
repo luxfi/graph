@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -435,4 +436,96 @@ func TestSwapRefusesAFeeThatIsNotAUint24(t *testing.T) {
 	if n := len(strings.TrimPrefix(got["data"].(string), "0x")) - 8; n != 7*64 {
 		t.Errorf("calldata is %d hex chars after the selector, want %d", n, 7*64)
 	}
+}
+
+// An address is twenty bytes and the path packs it against a fee with nothing
+// marking the boundary. A short one shifts every byte after it and the path
+// still parses — as a route through pools nobody named — so it is refused
+// rather than signed.
+func TestSwapRefusesAHopAddressThatIsNotAnAddress(t *testing.T) {
+	for _, bad := range []string{"0xdead", "", "not-an-address", lusd + "00", "0x" + strings.Repeat("z", 40)} {
+		for _, where := range []string{"in", "out"} {
+			tin, tout := lusd, cyrus
+			if where == "in" {
+				tin = bad
+			} else {
+				tout = bad
+			}
+			code, out := serveSwap(t, `{"quote":{"chainId":96369,"swapper":"`+trader+`",
+				"input":{"token":"`+lusd+`","amount":"1000"},"output":{"token":"`+cyrus+`","amount":"1000"},
+				"tradeType":"EXACT_INPUT","slippage":0.5,
+				"route":[[{"type":"v3-pool","address":"0x0000000000000000000000000000000000000001",
+					"tokenIn":{"address":"`+tin+`","chainId":96369,"symbol":"A","decimals":"18"},
+					"tokenOut":{"address":"`+tout+`","chainId":96369,"symbol":"B","decimals":"6"},
+					"fee":"3000","amountIn":"1000","amountOut":"1000"}]]}}`)
+			if code != http.StatusBadRequest {
+				t.Errorf("token%s=%q: status = %d, want 400 (%v)", where, bad, code, out)
+			}
+		}
+	}
+}
+
+// A quote says which chain priced it. Building this chain's router call from
+// another chain's quote would address pools by the same numbers on a book that
+// never quoted them — and these chains share deployment addresses, so that is
+// a real trade at a price nobody was shown.
+func TestSwapRefusesAQuoteFromAnotherChain(t *testing.T) {
+	body := func(chainID string) string {
+		return `{"quote":{"chainId":` + chainID + `,"swapper":"` + trader + `",
+			"input":{"token":"` + lusd + `","amount":"1000"},"output":{"token":"` + cyrus + `","amount":"1000"},
+			"tradeType":"EXACT_INPUT","slippage":0.5,
+			"route":[[{"type":"v3-pool","address":"0x0000000000000000000000000000000000000001",
+				"tokenIn":{"address":"` + lusd + `","chainId":96369,"symbol":"LUSD","decimals":"18"},
+				"tokenOut":{"address":"` + cyrus + `","chainId":96369,"symbol":"CYRUS","decimals":"6"},
+				"fee":"3000","amountIn":"1000","amountOut":"1000"}]]}}`
+	}
+	code, out := serveSwap(t, body("200200"))
+	if code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a quote priced on another chain: %v", code, out)
+	}
+	if d, _ := out["detail"].(string); !strings.Contains(d, "200200") || !strings.Contains(d, "96369") {
+		t.Errorf("detail = %q, want it to name both chains", d)
+	}
+	// This chain's own quote still works, and so does one that names no chain.
+	for _, id := range []string{"96369", "0"} {
+		if code, out := serveSwap(t, body(id)); code != http.StatusOK {
+			t.Errorf("chainId %s: status = %d, want 200 (%v)", id, code, out)
+		}
+	}
+}
+
+// Slippage is a percentage of an amount, so it lives between none of it and all
+// of it. Outside that the factor goes negative or past a word, and the bound
+// stops bounding: the calldata grows a character, or grows a minus sign.
+func TestSwapClampsSlippageToAPercentage(t *testing.T) {
+	const max = "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+	check := func(t *testing.T, tradeType, slip, outAmt string, wantWord int, wantVal *big.Int) {
+		t.Helper()
+		got := swapCall(t, `{"quote":{"chainId":96369,"swapper":"`+trader+`",
+			"input":{"token":"`+lusd+`","amount":"1000"},"output":{"token":"`+cyrus+`","amount":"`+outAmt+`"},
+			"tradeType":"`+tradeType+`","slippage":`+slip+`,
+			"route":[[{"type":"v3-pool","address":"0x0000000000000000000000000000000000000001",
+				"tokenIn":{"address":"`+lusd+`","chainId":96369,"symbol":"LUSD","decimals":"18"},
+				"tokenOut":{"address":"`+cyrus+`","chainId":96369,"symbol":"CYRUS","decimals":"6"},
+				"fee":"3000","amountIn":"1000","amountOut":"`+outAmt+`"}]]}}`)
+		data, _ := got["data"].(string)
+		body := strings.TrimPrefix(data, "0x")[8:]
+		if len(body) != 7*64 {
+			t.Fatalf("slippage %s: %d hex chars after the selector, want %d — the calldata is misaligned", slip, len(body), 7*64)
+		}
+		if strings.ContainsAny(body, "-") {
+			t.Fatalf("slippage %s: calldata contains a minus sign: %s", slip, data)
+		}
+		if w := words(body); w[wantWord].Cmp(wantVal) != 0 {
+			t.Errorf("slippage %s: bound = %v, want %v", slip, w[wantWord], wantVal)
+		}
+	}
+	maxOut, _ := new(big.Int).SetString(max, 10)
+	// Below zero clamps to zero: the bound is the quoted amount itself.
+	check(t, "EXACT_INPUT", "-0.01", max, 5, maxOut)
+	check(t, "EXACT_INPUT", "-100", "1000", 5, big.NewInt(1000))
+	// Above a hundred clamps to a hundred, and for exact output the bound stops
+	// at a word rather than running past one.
+	check(t, "EXACT_OUTPUT", "-101", "1000", 5, big.NewInt(1000))
+	check(t, "EXACT_INPUT", "1000", "1000", 5, big.NewInt(0))
 }

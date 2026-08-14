@@ -23,7 +23,7 @@ import (
 // approves a router once and trades against it for as long as they use it; an
 // approval sized to the trade in hand would put a signature in front of every
 // swap after it.
-var unlimited = maxWord
+var unlimited = new(big.Int).Set(maxWord)
 
 var (
 	selAllowance = selector("allowance(address,address)")
@@ -64,7 +64,7 @@ func HandleCheckApproval(chainID int64, rpc, router string) http.HandlerFunc {
 			return
 		}
 
-		if !isHexAddress(req.WalletAddress) {
+		if !IsAddress(req.WalletAddress) {
 			badQuote(w, "walletAddress must be an address")
 			return
 		}
@@ -90,7 +90,7 @@ func HandleCheckApproval(chainID int64, rpc, router string) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, none)
 			return
 		}
-		if !isHexAddress(req.Token) {
+		if !IsAddress(req.Token) {
 			badQuote(w, "token must be an address")
 			return
 		}
