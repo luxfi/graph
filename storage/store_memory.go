@@ -479,15 +479,25 @@ func (s *Store) SetPricedThrough(ts int64) {
 	s.pricedThrough = ts
 }
 
-// Traded reports every trade the store holds and what they were worth.
-func (s *Store) Traded() (int64, float64, error) {
+// Traded is a count of trades and what they were worth.
+type Traded struct {
+	Trades    int64
+	VolumeUSD float64
+}
+
+// TradedByPool reports what each pool has traded, over everything stored.
+func (s *Store) TradedByPool() (map[string]Traded, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var volume float64
+	out := map[string]Traded{}
 	for _, sw := range s.swaps {
-		volume += dollars(sw.AmountUSD)
+		k := strings.ToLower(sw.Pool)
+		t := out[k]
+		t.Trades++
+		t.VolumeUSD += dollars(sw.AmountUSD)
+		out[k] = t
 	}
-	return int64(len(s.swaps)), volume, nil
+	return out, nil
 }
 
 // dollars reads a formatted dollar figure back as a number. Anything unreadable
