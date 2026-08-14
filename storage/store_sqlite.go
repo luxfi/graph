@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -68,7 +69,7 @@ func (s *Store) Init(_ context.Context) error {
 		CREATE TABLE IF NOT EXISTS bundles   (id TEXT PRIMARY KEY, data JSON);
 		CREATE TABLE IF NOT EXISTS tokens    (id TEXT PRIMARY KEY, data JSON);
 		CREATE TABLE IF NOT EXISTS pools     (id TEXT PRIMARY KEY, data JSON);
-		CREATE TABLE IF NOT EXISTS swaps     (id TEXT PRIMARY KEY, data JSON, timestamp INTEGER, pool TEXT);
+		CREATE TABLE IF NOT EXISTS swaps     (id TEXT PRIMARY KEY, data JSON, timestamp INTEGER, pool TEXT, amountUSD REAL NOT NULL DEFAULT 0);
 		CREATE TABLE IF NOT EXISTS entities  (type TEXT, id TEXT, data JSON, PRIMARY KEY(type, id));
 		CREATE TABLE IF NOT EXISTS meta      (key TEXT PRIMARY KEY, value TEXT);
 
@@ -76,8 +77,102 @@ func (s *Store) Init(_ context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_swaps_pool      ON swaps(pool);
 		CREATE INDEX IF NOT EXISTS idx_entities_type   ON entities(type);
 	`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// A swap's columns are the queryable projection of its document. Timestamp
+	// and pool were promoted so a window and a pool's history could be asked of
+	// the database instead of of Go; amountUSD is promoted for the same reason.
+	// What the protocol has traded for all time is a SUM over this table, and a
+	// figure that exists only inside a JSON document cannot be summed — this
+	// driver's amalgamation is built without JSON1, so json_extract is not an
+	// option here either (see ValueSwaps).
+	//
+	// A database written before the column gets it now, filled once from the
+	// rows themselves. Every write since keeps the two in step, so the fill runs
+	// exactly once per database and the ALTER failing IS how it knows.
+	if _, err := s.db.Exec(`ALTER TABLE swaps ADD COLUMN amountUSD REAL NOT NULL DEFAULT 0`); err == nil {
+		return s.projectAmounts()
+	}
+	return nil
+}
+
+// projectAmounts copies each stored swap's dollar value out of its document and
+// into the column beside it.
+func (s *Store) projectAmounts() error {
+	rows, err := s.db.Query(`SELECT id, data FROM swaps`)
+	if err != nil {
+		return fmt.Errorf("storage: read swaps to project: %w", err)
+	}
+	type valued struct {
+		id  string
+		usd float64
+	}
+	// Drained whole before the write opens, because a read held open across a
+	// write on the same file is how SQLite is asked to deadlock with itself.
+	var priced []valued
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			continue
+		}
+		var d SeedSwapData
+		if json.Unmarshal([]byte(raw), &d) != nil {
+			continue
+		}
+		if usd := dollars(d.AmountUSD); usd != 0 {
+			priced = append(priced, valued{id, usd})
+		}
+	}
+	rows.Close()
+	if len(priced) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("storage: project amounts: %w", err)
+	}
+	stmt, err := tx.Prepare(`UPDATE swaps SET amountUSD = ? WHERE id = ?`)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("storage: project amounts: %w", err)
+	}
+	defer stmt.Close()
+	for _, v := range priced {
+		if _, err := stmt.Exec(v.usd, v.id); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("storage: project %s: %w", v.id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// dollars reads a formatted dollar figure back as a number. Anything unreadable
+// is worth nothing, which is what an unpriced swap already says.
+func dollars(s string) float64 {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
+}
+
+// Traded reports every trade the store holds and what they were worth.
+//
+// Over the whole table, not over a window: a valuation pass reads a bounded
+// slice of this table because the table grows forever, and that bound is right
+// for the pass and wrong for a figure the wire calls all-time. Summing a column
+// costs one scan and answers for every trade ever indexed.
+func (s *Store) Traded() (int64, float64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var count int64
+	var volume float64
+	err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(amountUSD), 0) FROM swaps`).Scan(&count, &volume)
+	if err != nil {
+		return 0, 0, fmt.Errorf("storage: total traded: %w", err)
+	}
+	return count, volume, nil
 }
 
 // Close closes the database.
@@ -182,8 +277,8 @@ func (s *Store) SeedSwap(id string, d *SeedSwapData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	data, _ := json.Marshal(d)
-	s.db.Exec("INSERT OR REPLACE INTO swaps(id, data, timestamp, pool) VALUES(?, ?, ?, ?)",
-		id, string(data), d.Timestamp, d.Pool)
+	s.db.Exec("INSERT OR REPLACE INTO swaps(id, data, timestamp, pool, amountUSD) VALUES(?, ?, ?, ?, ?)",
+		id, string(data), d.Timestamp, d.Pool, dollars(d.AmountUSD))
 }
 
 // ValueSwaps writes what each trade was worth onto the stored swap.
@@ -220,7 +315,7 @@ func (s *Store) ValueSwaps(usd map[string]string) (int64, error) {
 		return 0, fmt.Errorf("prepare read: %w", err)
 	}
 	defer read.Close()
-	write, err := tx.Prepare(`UPDATE swaps SET data = ? WHERE id = ?`)
+	write, err := tx.Prepare(`UPDATE swaps SET data = ?, amountUSD = ? WHERE id = ?`)
 	if err != nil {
 		tx.Rollback()
 		return 0, fmt.Errorf("prepare write: %w", err)
@@ -248,7 +343,7 @@ func (s *Store) ValueSwaps(usd map[string]string) (int64, error) {
 			tx.Rollback()
 			return 0, fmt.Errorf("encode %s: %w", id, err)
 		}
-		res, err := write.Exec(string(next), id)
+		res, err := write.Exec(string(next), dollars(v), id)
 		if err != nil {
 			tx.Rollback()
 			return 0, fmt.Errorf("write %s: %w", id, err)
