@@ -1078,8 +1078,14 @@ func checksumAddress(addr string) string {
 	return string(out)
 }
 
+// maxWord is the largest value an ABI word holds. An amount above it is not a
+// large trade, it is not a number the chain has — and rendered as an argument
+// it runs 65 hex characters instead of 64, shifting every argument after it, so
+// the call would still be well-formed and would mean something else entirely.
+var maxWord = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+
 // parseWei reads an amount as the caller must write it: base units, decimal
-// digits only. A float here would round someone's balance.
+// digits only, inside a word. A float here would round someone's balance.
 func parseWei(s string) (*big.Int, bool) {
 	if s == "" {
 		return nil, false
@@ -1090,5 +1096,8 @@ func parseWei(s string) (*big.Int, bool) {
 		}
 	}
 	n, ok := new(big.Int).SetString(s, 10)
-	return n, ok
+	if !ok || n.Cmp(maxWord) > 0 {
+		return nil, false
+	}
+	return n, true
 }

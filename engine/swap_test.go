@@ -372,3 +372,39 @@ func TestSwapExactOutputReversesFeesWithTheTokens(t *testing.T) {
 		t.Errorf("packed path is not the reversed route with reversed fees\n got  %s\n want %s inside", data, want)
 	}
 }
+
+// Every argument in a call is one word wide, and position is the only thing
+// that says which argument is which. A value that does not fit renders 65 hex
+// characters instead of 64 and shifts everything after it — the call stays
+// well-formed and means something else. So an amount above a word is refused
+// at the boundary, and a bound inflated past one stops there.
+func TestSwapRefusesAnAmountWiderThanAWord(t *testing.T) {
+	const maxUint256 = "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+	const overflow = "115792089237316195423570985008687907853269984665640564039457584007913129639936"
+
+	hop := `"route":[[{"type":"v3-pool","address":"0x0000000000000000000000000000000000000001",
+		"tokenIn":{"address":"` + lusd + `","chainId":96369,"symbol":"LUSD","decimals":"18"},
+		"tokenOut":{"address":"` + cyrus + `","chainId":96369,"symbol":"CYRUS","decimals":"6"},
+		"fee":"3000","amountIn":"1","amountOut":"1"}]]`
+
+	code, out := serveSwap(t, `{"quote":{"chainId":96369,"swapper":"`+trader+`",
+		"input":{"token":"`+lusd+`","amount":"`+overflow+`"},
+		"output":{"token":"`+cyrus+`","amount":"1"},
+		"tradeType":"EXACT_INPUT","slippage":0.5,`+hop+`}}`)
+	if code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for an amount wider than a word: %v", code, out)
+	}
+
+	// At the maximum, inflating the bound cannot widen it further.
+	got := swapCall(t, `{"quote":{"chainId":96369,"swapper":"`+trader+`",
+		"input":{"token":"`+lusd+`","amount":"`+maxUint256+`"},
+		"output":{"token":"`+cyrus+`","amount":"1"},
+		"tradeType":"EXACT_OUTPUT","slippage":50,`+hop+`}}`)
+	data, _ := got["data"].(string)
+	if n := len(strings.TrimPrefix(data, "0x")) - 8; n%64 != 0 {
+		t.Errorf("calldata is %d hex chars after the selector, not a whole number of words", n)
+	}
+	if w := words(strings.TrimPrefix(data, "0x")[8:]); len(w) != 7 || w[5].Cmp(maxWord) != 0 {
+		t.Errorf("amountInMaximum did not stop at a word: %v", got["data"])
+	}
+}

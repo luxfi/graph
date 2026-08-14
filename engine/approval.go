@@ -19,10 +19,11 @@ import (
 // zero: the chain's own coin, which is sent with the call and never spent from
 // a balance, and an allowance that already covers the trade.
 
-// unlimited is what an approval grants. A person approves a router once and
-// trades against it for as long as they use it; an approval sized to the
-// trade in hand would put a signature in front of every swap after it.
-var unlimited = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+// unlimited is what an approval grants: every value a word holds. A person
+// approves a router once and trades against it for as long as they use it; an
+// approval sized to the trade in hand would put a signature in front of every
+// swap after it.
+var unlimited = maxWord
 
 var (
 	selAllowance = selector("allowance(address,address)")
