@@ -153,8 +153,17 @@ func HandleSwap(chainID int64, router, wrapped string) http.HandlerFunc {
 		// Native input is not transferred, it is sent. The router wraps whatever
 		// arrives with the call, so the value carries the input amount and the
 		// path still names the wrapped token.
+		//
+		// Which token went in is stated twice on a quote — once at the top and
+		// once on the first hop — and a quote that carries only the hop is still
+		// a quote. Reading just the top would send no value with it and the swap
+		// would revert for a reason nothing in the request explains.
+		in := q.Input.Token
+		if in == "" {
+			in = hops[0].TokenIn.Address
+		}
 		value := "0"
-		if isNativeAddr(q.Input.Token) {
+		if isNativeAddr(in) {
 			value = amountIn.String()
 		}
 
