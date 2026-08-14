@@ -1,6 +1,9 @@
 package storage
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -155,5 +158,56 @@ func TestCompareValues_MixedTypes(t *testing.T) {
 	cmp = compareValues("abc", "xyz")
 	if cmp >= 0 {
 		t.Error("abc should be less than xyz lexicographically")
+	}
+}
+
+// A quiet pool's trades are its own, however much the busy pool beside it trades.
+//
+// The limit belongs to the database, so a filter that runs afterwards filters
+// what the limit already threw away: asking for one pool's last N trades read
+// the N newest chain-wide and kept the few that matched. One pair does most of
+// the trading on a live chain and fills any recent window by itself, so every
+// other pool answered with nothing — its history present, and unreachable.
+func TestGetSwapsFiltersBeforeItLimits(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := s.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	const busy, quiet = "0xbusy", "0xquiet"
+
+	// The quiet pool trades first, then the busy one buries it.
+	for i := 0; i < 5; i++ {
+		s.SeedSwap(fmt.Sprintf("q%d", i), &SeedSwapData{
+			Timestamp: int64(1000 + i), Block: uint64(1 + i), Pool: quiet,
+			Amount0: "1", Amount1: "-2", AmountUSD: "1",
+		})
+	}
+	for i := 0; i < 500; i++ {
+		s.SeedSwap(fmt.Sprintf("b%d", i), &SeedSwapData{
+			Timestamp: int64(2000 + i), Block: uint64(100 + i), Pool: busy,
+			Amount0: "1", Amount1: "-2", AmountUSD: "1",
+		})
+	}
+
+	got, err := s.GetSwaps(context.Background(), 100, "timestamp", "desc",
+		map[string]interface{}{"pool": quiet})
+	if err != nil {
+		t.Fatalf("GetSwaps: %v", err)
+	}
+	rows, _ := got.([]interface{})
+	if len(rows) != 5 {
+		t.Errorf("quiet pool returned %d of its 5 trades — the limit ran before the filter", len(rows))
+	}
+	for _, r := range rows {
+		m := r.(map[string]interface{})
+		id, _ := m["id"].(string)
+		if !strings.HasPrefix(id, "q") {
+			t.Errorf("row %q is not the filtered pool's", id)
+		}
 	}
 }

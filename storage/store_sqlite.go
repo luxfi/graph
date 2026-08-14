@@ -561,8 +561,20 @@ func (s *Store) GetSwaps(_ context.Context, limit int, orderBy, orderDirection s
 		orderDirection = "desc"
 	}
 
-	// Use SQL ordering for timestamp (indexed column)
+	// A filter on the pool goes into the SQL, because the LIMIT is applied by
+	// the database and a limit that runs before the filter answers with the
+	// first N rows rather than the first N matches.
+	//
+	// One pair does most of the trading on a live chain, so it fills any recent
+	// window by itself: asking for one quiet pool's last 1000 trades read the
+	// 1000 newest chain-wide, kept the handful that matched, and usually
+	// answered with none at all. The pool column is indexed for exactly this.
+	args := []interface{}{}
 	query := "SELECT id, data FROM swaps"
+	if pool, ok := whereString(where, "pool"); ok {
+		query += " WHERE pool = ? COLLATE NOCASE"
+		args = append(args, pool)
+	}
 	if orderBy == "timestamp" {
 		if strings.EqualFold(orderDirection, "desc") {
 			query += " ORDER BY timestamp DESC"
@@ -571,13 +583,14 @@ func (s *Store) GetSwaps(_ context.Context, limit int, orderBy, orderDirection s
 		}
 	}
 	query += " LIMIT ?"
+	args = append(args, limit)
 
 	// Load all swaps first, close rows, then resolve pool/token refs.
 	type idSwap struct {
 		id string
 		sw SeedSwapData
 	}
-	rows, err := s.db.Query(query, limit)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -606,6 +619,21 @@ func (s *Store) GetSwaps(_ context.Context, limit int, orderBy, orderDirection s
 		result = result[:limit]
 	}
 	return result, nil
+}
+
+// whereString reads a plain string equality out of a `where` map — the shape a
+// filter naming one pool arrives in. Anything richer is left to FilterResults,
+// which still runs over whatever the query returned.
+func whereString(where map[string]interface{}, key string) (string, bool) {
+	v, ok := where[key]
+	if !ok {
+		return "", false
+	}
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return "", false
+	}
+	return s, true
 }
 
 func (s *Store) swapToMap(id string, sw *SeedSwapData) map[string]interface{} {
