@@ -178,12 +178,10 @@ func TestHandleInitializeV4_PoolMarketFactory(t *testing.T) {
 	if p, _ := s.GetPool(nil, poolID); p == nil {
 		t.Fatal("expected pool from InitializeV4")
 	}
-	// The create path owns the factory tx count; poolCount is derived from the
-	// store by the valuation pass (TestRevalue_DerivesTVLPricesAndPoolCount).
-	f, _ := s.GetFactory(nil, "1")
-	if f == nil || asInt64(f.(map[string]interface{})["txCount"]) != 1 {
-		t.Fatalf("expected factory txCount=1, got %v", f)
-	}
+	// What the create path owns is the registration itself. The protocol's pool
+	// count and its trade count are both derived from the store by the valuation
+	// pass (TestRevalue_DerivesTVLPricesAndPoolCount), because a tally kept by
+	// the handlers drifts on every restart and re-index.
 	mk, _ := s.GetByType("Market", poolID)
 	if mk == nil {
 		t.Fatal("expected DEX Market from InitializeV4 at 0x9999")
@@ -230,38 +228,6 @@ func TestHandleInitializeV4_MergesStubVolume(t *testing.T) {
 	}
 	if fmt.Sprint(mm["baseToken"]) != cur0 || asInt64(mm["feeTier"]) != 500 {
 		t.Errorf("Initialize must add rich fields: baseToken=%v feeTier=%v", mm["baseToken"], mm["feeTier"])
-	}
-}
-
-// bumpFactory must PRESERVE the USD aggregates across its read-modify-write — the
-// landing-page header's TVL/volume. SeedFactory is INSERT OR REPLACE, so writing
-// them empty on every pool-create/swap would clobber them (MEDIUM).
-func TestBumpFactory_PreservesTVLAndVolume(t *testing.T) {
-	s := newMemSQLiteStore(t)
-	idx := NewWithConfig(Config{RPC: "http://unused"}, s)
-
-	// Seed the factory with USD aggregates (as the price-oracle path would).
-	s.SeedFactory("1", &storage.SeedFactoryData{
-		PoolCount: 2, TxCount: 5, TotalValueLockedUSD: "1000000", TotalVolumeUSD: "5000000",
-	})
-
-	// A pool-create bumps the tx count — and must not disturb any field it does
-	// not own: not the USD aggregates, and not poolCount (derived elsewhere).
-	idx.bumpFactory()
-
-	f, _ := s.GetFactory(nil, "1")
-	fm := f.(map[string]interface{})
-	if asInt64(fm["txCount"]) != 6 {
-		t.Errorf("txCount = %v, want 6", fm["txCount"])
-	}
-	if asInt64(fm["poolCount"]) != 2 {
-		t.Errorf("poolCount must be carried through untouched: got %v want 2", fm["poolCount"])
-	}
-	if fmt.Sprint(fm["totalValueLockedUSD"]) != "1000000" {
-		t.Errorf("totalValueLockedUSD clobbered: got %v want 1000000", fm["totalValueLockedUSD"])
-	}
-	if fmt.Sprint(fm["totalVolumeUSD"]) != "5000000" {
-		t.Errorf("totalVolumeUSD clobbered: got %v want 5000000", fm["totalVolumeUSD"])
 	}
 }
 
@@ -671,12 +637,9 @@ func TestHandleV2_RejectsNonFactory(t *testing.T) {
 	if p, _ := s.GetPool(nil, ct); p == nil {
 		t.Fatal("canonical PairCreated must seed the pair")
 	}
-	// poolCount is DERIVED by the valuation pass from the store (see
+	// The protocol's counts are DERIVED by the valuation pass from the store (see
 	// TestRevalue_DerivesTVLPricesAndPoolCount); what the create handler owns is
-	// the factory tx count, and the registration itself — asserted above.
-	if f, _ := s.GetFactory(nil, "1"); f == nil || asInt64(f.(map[string]interface{})["txCount"]) != 1 {
-		t.Fatalf("canonical PairCreated must bump factory txCount to 1, got %v", f)
-	}
+	// the registration itself — asserted above.
 	idx.processLog(context.Background(), swapV2Log(ct, token0, "0xreal", 1000, 2500))
 	sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil)
 	if sw == nil || len(sw.([]interface{})) != 1 {
@@ -737,9 +700,6 @@ func TestHandleV3_RejectsNonFactory(t *testing.T) {
 	idx.processLog(context.Background(), poolCreatedLog(testFactoryV3, token0, token1, 3000, ct))
 	if p, _ := s.GetPool(nil, ct); p == nil {
 		t.Fatal("canonical PoolCreated must seed the pool")
-	}
-	if f, _ := s.GetFactory(nil, "1"); f == nil || asInt64(f.(map[string]interface{})["txCount"]) != 1 {
-		t.Fatalf("canonical PoolCreated must bump factory txCount to 1, got %v", f)
 	}
 	idx.processLog(context.Background(), swapV3Log(ct, token0, "0xreal", 1000, 2500))
 	sw, _ := s.GetSwaps(nil, 10, "timestamp", "desc", nil)
