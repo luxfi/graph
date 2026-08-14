@@ -275,11 +275,28 @@ func (idx *Indexer) revalue(parent context.Context) {
 	if m, ok := f.(map[string]interface{}); ok {
 		txCount = asInt64(m["txCount"])
 	}
+	// Volume for all time is the days added up, not one window summed.
+	//
+	// A pass values a bounded slice of the swap table, newest first, because the
+	// table grows forever and rescanning it would cost more every day the chain
+	// lives. That bound is right for the pass and wrong for this field: the wire
+	// calls it total volume, and totalling a window answers for the newest
+	// trades only — on a chain with a million swaps it reported the last
+	// twelve percent and called it everything.
+	//
+	// The day series already holds each day's volume, written once and kept, so
+	// the sum of those rows is the whole history at the cost of reading a row
+	// per day. The window stays exactly as it is; only what is claimed of it
+	// changes.
+	volume := totalVol
+	if allDays, err := idx.factoryVolume(); err == nil && allDays > volume {
+		volume = allDays
+	}
 	idx.store.SeedFactory("1", &storage.SeedFactoryData{
 		PoolCount:           int64(len(pools)),
 		TxCount:             txCount,
 		TotalValueLockedUSD: fmtUSD(totalTVL),
-		TotalVolumeUSD:      fmtUSD(totalVol),
+		TotalVolumeUSD:      fmtUSD(volume),
 	})
 
 	// ── The day series: the same trades, grouped by the day they happened ──
@@ -664,4 +681,36 @@ func fmtRatio(num, den float64) string {
 		return "0"
 	}
 	return strconv.FormatFloat(num/den, 'g', 12, 64)
+}
+
+// factoryVolume adds up every day the protocol has traded.
+//
+// Each row was written by the pass that saw that day and has been kept since,
+// so this is the whole history without rereading a swap. A day the indexer
+// never saw contributes nothing, which is honest: it can only report what it
+// has been shown.
+func (idx *Indexer) factoryVolume() (float64, error) {
+	rows, err := idx.store.Entities(storage.FactoryDay, maxValuedPools, "date", "asc", nil)
+	if err != nil {
+		return 0, err
+	}
+	list, ok := rows.([]interface{})
+	if !ok {
+		return 0, nil
+	}
+	var sum float64
+	for _, r := range list {
+		m, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		// The same overflow guard the rest of this pass uses (1e12): a tiny pool
+		// can produce a decimal artefact that would otherwise become the headline.
+		v, err := strconv.ParseFloat(fmt.Sprint(m["volumeUSD"]), 64)
+		if err != nil || !(v > 0) || v > 1e12 {
+			continue
+		}
+		sum += v
+	}
+	return sum, nil
 }
