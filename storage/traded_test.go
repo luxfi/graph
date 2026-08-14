@@ -51,9 +51,9 @@ func TestTradedSurvivesTheColumnArriving(t *testing.T) {
 		t.Fatalf("init schema: %v", err)
 	}
 
-	traded, volume, err := s.Traded()
+	traded, volume, err := traded3(s)
 	if err != nil {
-		t.Fatalf("Traded: %v", err)
+		t.Fatalf("TradedByPool: %v", err)
 	}
 	if traded != 3 {
 		t.Errorf("trades = %d, want 3", traded)
@@ -71,7 +71,7 @@ func TestTradedSurvivesTheColumnArriving(t *testing.T) {
 	if err := s.Init(context.Background()); err != nil {
 		t.Fatalf("re-init: %v", err)
 	}
-	if _, volume, _ = s.Traded(); volume != 4000 {
+	if _, volume, _ = traded3(s); volume != 4000 {
 		t.Errorf("volume = %v, want 4000 after repricing s1", volume)
 	}
 }
@@ -91,13 +91,10 @@ func TestValueSwapsMovesTheColumn(t *testing.T) {
 	}
 	s.SeedSwap("s1", &SeedSwapData{Timestamp: 100, Pool: "0xpool", AmountUSD: "0"})
 
-	if _, _, err := traded(t, s); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := s.ValueSwaps(map[string]string{"s1": "42.50"}); err != nil {
 		t.Fatalf("ValueSwaps: %v", err)
 	}
-	count, volume, err := traded(t, s)
+	count, volume, err := traded3(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,9 +103,20 @@ func TestValueSwapsMovesTheColumn(t *testing.T) {
 	}
 }
 
-func traded(t *testing.T, s *Store) (int64, float64, error) {
-	t.Helper()
-	return s.Traded()
+// The protocol's total is the fold of the per-pool answer, which is what the
+// valuation pass does with it.
+func traded3(s *Store) (int64, float64, error) {
+	byPool, err := s.TradedByPool()
+	if err != nil {
+		return 0, 0, err
+	}
+	var n int64
+	var usd float64
+	for _, v := range byPool {
+		n += v.Trades
+		usd += v.VolumeUSD
+	}
+	return n, usd, nil
 }
 
 // A history longer than any window has to be reachable a batch at a time.

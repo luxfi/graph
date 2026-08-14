@@ -78,6 +78,11 @@ themselves; the ALTER failing is how a later start knows not to do it again.
 Arriving empty would have zeroed every trade older than the current window — the
 fix erasing the number it exists to correct.
 
+**A pool's volume and the protocol's are one question sliced two ways**, so
+`TradedByPool()` answers both and the total is the fold. Asked separately they
+drifted fifty times apart — the protocol summing every trade ever indexed while
+each pool summed the window a pass had just read.
+
 **Total volume is not the pass's total.** `maxValuedSwaps` bounds what one
 valuation pass values, because the swap table grows forever. Summing that window
 answers for the newest trades only. Summing the day series does not escape it

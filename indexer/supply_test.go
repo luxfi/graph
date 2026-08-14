@@ -115,30 +115,44 @@ func TestNativeSupplySurvivesAStaleCopy(t *testing.T) {
 //
 // A pass values a bounded slice of the swap table because that table grows
 // forever. The bound is right for the pass and wrong for the field the wire
-// calls total volume. Summing the day series does not escape it — those rows
-// are folded from the same window, so their sum is that window again. This
-// gives the store more trades than any window would carry and asks it what has
-// traded.
-func TestFactoryVolumeCoversEveryTrade(t *testing.T) {
+// calls total volume. Summing the day series does not escape it — those rows are
+// folded from the same window, so their sum is that window again.
+//
+// A pool's own figure and the protocol's total are the same question sliced two
+// ways, so one grouped answer serves both: asked separately they drifted fifty
+// times apart, a landing page claiming $206,718 over a list of pools claiming
+// $4,159.
+func TestTradedByPoolCoversEveryTrade(t *testing.T) {
 	s := newMemSQLiteStore(t)
 
-	for i, usd := range []string{"1000.00", "2000.00", "500.00"} {
+	for i, tr := range []struct {
+		pool string
+		usd  string
+	}{{"0xaaa", "1000.00"}, {"0xaaa", "2000.00"}, {"0xbbb", "500.00"}} {
 		s.SeedSwap(fmt.Sprintf("0xabc#%d", i), &storage.SeedSwapData{
 			Timestamp: int64(1767225600 + i*86400),
 			Block:     uint64(100 + i),
-			Pool:      "0xpool",
-			AmountUSD: usd,
+			Pool:      tr.pool,
+			AmountUSD: tr.usd,
 		})
 	}
 
-	traded, volume, err := s.Traded()
+	got, err := s.TradedByPool()
 	if err != nil {
-		t.Fatalf("Traded: %v", err)
+		t.Fatalf("TradedByPool: %v", err)
 	}
-	if traded != 3 {
-		t.Errorf("trades = %d, want 3", traded)
+	if got["0xaaa"].VolumeUSD != 3000 || got["0xaaa"].Trades != 2 {
+		t.Errorf("0xaaa = %+v, want 2 trades worth 3000", got["0xaaa"])
 	}
-	if volume != 3500 {
-		t.Errorf("volume = %v, want 3500 \u2014 a trade outside the window still traded", volume)
+	if got["0xbbb"].VolumeUSD != 500 || got["0xbbb"].Trades != 1 {
+		t.Errorf("0xbbb = %+v, want 1 trade worth 500", got["0xbbb"])
+	}
+
+	var total float64
+	for _, v := range got {
+		total += v.VolumeUSD
+	}
+	if total != 3500 {
+		t.Errorf("protocol total = %v, want 3500 — it is the fold of the pools, not a second sum", total)
 	}
 }
