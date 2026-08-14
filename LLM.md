@@ -63,6 +63,29 @@ which is exactly what `healSwapTimes` needs to look the real time up. That is
 `Dated()`, and both the heal and the day series ask it. The heal runs once at
 `Run` and stops when every row has a time.
 
+## A swap's columns are its queryable projection, and all-time volume is a SUM
+
+`swaps` is `(id, data JSON, timestamp, pool, amountUSD)`. The three scalars are
+copies of fields inside `data`, promoted so the database can answer questions Go
+would otherwise answer by reading the table into memory: a window (`timestamp`),
+a pool's own history (`pool`), and what the protocol has traded (`amountUSD`).
+`SeedSwap` and `ValueSwaps` write both homes; `Store.Traded()` is the only reader
+of the sum. 🪤 There is no `json_extract` escape hatch — this driver's
+amalgamation is built without JSON1, which is why the column had to exist at all.
+
+A database written before the column gets it in `Init`, filled once from the rows
+themselves; the ALTER failing is how a later start knows not to do it again.
+Arriving empty would have zeroed every trade older than the current window — the
+fix erasing the number it exists to correct.
+
+**Total volume is not the pass's total.** `maxValuedSwaps` bounds what one
+valuation pass values, because the swap table grows forever. Summing that window
+answers for the newest trades only. Summing the day series does not escape it
+either: those rows are folded from the same window, so their sum IS the window —
+a fix that looked right and changed nothing. `Factory.txCount` is a separate
+question (every interaction, mints and burns included) and stays with the
+handlers that see them.
+
 ## The day series (series.go) is a SECOND FOLD over the valuation pass's trades
 
 `tokenDayDatas` / `poolDayDatas` / `uniswapDayDatas` are rolled out of the swaps

@@ -270,27 +270,26 @@ func (idx *Indexer) revalue(parent context.Context) {
 	// accumulated by the create handlers — an accumulator drifts on every
 	// restart, re-index and duplicate create, and there is no reason to guess a
 	// number the store can be asked for.
+	//
+	// txCount counts every interaction — mints and burns as well as trades — and
+	// is carried through from the handlers that see them. Volume is a different
+	// question and gets a different answer: what the whole table has traded.
+	//
+	// A pass values a bounded slice of that table, newest first, because it grows
+	// forever and rescanning it would cost more every day the chain lives. The
+	// bound is right for the pass and wrong for a figure the wire calls all-time.
+	// Summing the day series does not escape it either — those rows are folded
+	// from the same window, so their sum IS the window. Summing a column costs
+	// one scan and answers for every trade ever indexed.
 	f, _ := idx.store.GetFactory(nil, "1")
 	var txCount int64
 	if m, ok := f.(map[string]interface{}); ok {
 		txCount = asInt64(m["txCount"])
 	}
-	// Volume for all time is the days added up, not one window summed.
-	//
-	// A pass values a bounded slice of the swap table, newest first, because the
-	// table grows forever and rescanning it would cost more every day the chain
-	// lives. That bound is right for the pass and wrong for this field: the wire
-	// calls it total volume, and totalling a window answers for the newest
-	// trades only — on a chain with a million swaps it reported the last
-	// twelve percent and called it everything.
-	//
-	// The day series already holds each day's volume, written once and kept, so
-	// the sum of those rows is the whole history at the cost of reading a row
-	// per day. The window stays exactly as it is; only what is claimed of it
-	// changes.
-	volume := totalVol
-	if allDays, err := idx.factoryVolume(); err == nil && allDays > volume {
-		volume = allDays
+	traded, volume, err := idx.store.Traded()
+	if err != nil {
+		idx.logf("[valuation] all-time volume unavailable, reporting this window: %v", err)
+		traded, volume = int64(len(trades)), totalVol
 	}
 	idx.store.SeedFactory("1", &storage.SeedFactoryData{
 		PoolCount:           int64(len(pools)),
@@ -312,10 +311,6 @@ func (idx *Indexer) revalue(parent context.Context) {
 		tokens:   tokens,
 	})
 
-	window := ""
-	if len(trades) >= maxValuedSwaps {
-		window = fmt.Sprintf(" [volume covers the most recent %d swaps only]", maxValuedSwaps)
-	}
 	// Say what the swap write actually did. A pass that reports its pools and
 	// then writes nothing to the trades underneath them is how a pool came to
 	// claim thousands in volume over a list of swaps each worth zero.
@@ -323,9 +318,12 @@ func (idx *Indexer) revalue(parent context.Context) {
 	if valuedErr != nil {
 		priced = fmt.Sprintf(", SWAP PRICES NOT WRITTEN: %v", valuedErr)
 	}
-	idx.logf("[valuation] %d/%d pools valued, %d tokens priced, %d swaps — TVL $%s, volume $%s%s (%s)%s",
+	// Both volumes, because they answer different questions and a reader who
+	// sees one alone cannot tell which he has. The first is what this pass just
+	// valued; the second is what the chain has traded and what is served.
+	idx.logf("[valuation] %d/%d pools valued, %d tokens priced, %d swaps — TVL $%s, volume $%s of $%s over %d trades%s (%s)",
 		len(vps), len(pools), len(prices), len(trades), fmtUSD(totalTVL), fmtUSD(totalVol),
-		priced, time.Since(started).Round(time.Millisecond), window)
+		fmtUSD(volume), traded, priced, time.Since(started).Round(time.Millisecond))
 }
 
 // readBalances asks each pool's two tokens what the pool holds. One eth_call
@@ -681,36 +679,4 @@ func fmtRatio(num, den float64) string {
 		return "0"
 	}
 	return strconv.FormatFloat(num/den, 'g', 12, 64)
-}
-
-// factoryVolume adds up every day the protocol has traded.
-//
-// Each row was written by the pass that saw that day and has been kept since,
-// so this is the whole history without rereading a swap. A day the indexer
-// never saw contributes nothing, which is honest: it can only report what it
-// has been shown.
-func (idx *Indexer) factoryVolume() (float64, error) {
-	rows, err := idx.store.Entities(storage.FactoryDay, maxValuedPools, "date", "asc", nil)
-	if err != nil {
-		return 0, err
-	}
-	list, ok := rows.([]interface{})
-	if !ok {
-		return 0, nil
-	}
-	var sum float64
-	for _, r := range list {
-		m, ok := r.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		// The same overflow guard the rest of this pass uses (1e12): a tiny pool
-		// can produce a decimal artefact that would otherwise become the headline.
-		v, err := strconv.ParseFloat(fmt.Sprint(m["volumeUSD"]), 64)
-		if err != nil || !(v > 0) || v > 1e12 {
-			continue
-		}
-		sum += v
-	}
-	return sum, nil
 }

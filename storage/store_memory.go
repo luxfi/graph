@@ -5,7 +5,9 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -437,6 +439,27 @@ func (s *Store) PoolsRaw() map[string]*SeedPoolData {
 		out[id] = &c
 	}
 	return out
+}
+
+// Traded reports every trade the store holds and what they were worth.
+func (s *Store) Traded() (int64, float64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var volume float64
+	for _, sw := range s.swaps {
+		volume += dollars(sw.AmountUSD)
+	}
+	return int64(len(s.swaps)), volume, nil
+}
+
+// dollars reads a formatted dollar figure back as a number. Anything unreadable
+// is worth nothing, which is what an unpriced swap already says.
+func dollars(s string) float64 {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
 }
 
 // RecentSwapsRaw returns the `limit` most recent stored swaps keyed by id.
