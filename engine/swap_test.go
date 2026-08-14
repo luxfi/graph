@@ -408,3 +408,31 @@ func TestSwapRefusesAnAmountWiderThanAWord(t *testing.T) {
 		t.Errorf("amountInMaximum did not stop at a word: %v", got["data"])
 	}
 }
+
+// A fee is a uint24 and the path packs it in exactly three bytes between two
+// addresses. One that does not fit renders wider and shifts every byte after
+// it, so the path would name real pools at addresses nobody asked for; a
+// negative one renders as hex with a minus in it, which is not a number.
+func TestSwapRefusesAFeeThatIsNotAUint24(t *testing.T) {
+	body := func(fee string) string {
+		return `{"quote":{"chainId":96369,"swapper":"` + trader + `",
+			"input":{"token":"` + lusd + `","amount":"1000"},
+			"output":{"token":"` + cyrus + `","amount":"1000"},
+			"tradeType":"EXACT_INPUT","slippage":0.5,
+			"route":[[{"type":"v3-pool","address":"0x0000000000000000000000000000000000000001",
+				"tokenIn":{"address":"` + lusd + `","chainId":96369,"symbol":"LUSD","decimals":"18"},
+				"tokenOut":{"address":"` + cyrus + `","chainId":96369,"symbol":"CYRUS","decimals":"6"},
+				"fee":"` + fee + `","amountIn":"1000","amountOut":"1000"}]]}}`
+	}
+	for _, fee := range []string{"16777216", "-1", "99999999999999999999", "abc"} {
+		code, out := serveSwap(t, body(fee))
+		if code != http.StatusBadRequest {
+			t.Errorf("fee %q: status = %d, want 400 (%v)", fee, code, out)
+		}
+	}
+	// The widest fee that does fit is still accepted, and still three bytes.
+	got := swapCall(t, body("16777215"))
+	if n := len(strings.TrimPrefix(got["data"].(string), "0x")) - 8; n != 7*64 {
+		t.Errorf("calldata is %d hex chars after the selector, want %d", n, 7*64)
+	}
+}
