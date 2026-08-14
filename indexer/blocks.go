@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/luxfi/graph/storage"
 )
 
 // blockTimeBatch is how many headers one JSON-RPC batch asks for. Headers are
@@ -119,38 +117,40 @@ func (idx *Indexer) stampTimes(ctx context.Context, logs []logEntry) error {
 }
 
 // healSwapTimes gives stored swaps the real time of their block, and reports
-// how many still lack one.
+// how many it dated and how many still lack one.
 //
 // A row written by an older build holds its block NUMBER in Timestamp and has
 // no Block at all. That is not a guess: no swap is mined in block 0, so an
 // unset Block identifies exactly those rows, and the number it left behind is
 // the very thing needed to look the time up. A row whose supposed block the
 // chain does not answer for is left alone — this heals what it can prove.
-func (idx *Indexer) healSwapTimes(ctx context.Context) (int, error) {
-	swaps := idx.store.RecentSwapsRaw(maxValuedSwaps)
-	stale := map[string]*storage.SeedSwapData{}
+func (idx *Indexer) healSwapTimes(ctx context.Context) (healed, remaining int, err error) {
+	// Asked for by the property that identifies them. This read used to be
+	// RecentSwapsRaw — the newest rows by timestamp — which is the one window an
+	// undated row is never in: it holds a block number, block numbers are small
+	// beside unix seconds, so every row needing repair sorts behind every row
+	// already correct. Past a full window of dated rows the heal saw nothing
+	// stale, reported success, and stopped. Trades from a million blocks of
+	// history stayed dated to 1970 and sorted below everything on every
+	// newest-first list, which is to say they were indexed and invisible.
+	stale := idx.store.UndatedSwapsRaw(maxValuedSwaps)
 	var blocks []uint64
 	seen := map[uint64]bool{}
-	for id, sw := range swaps {
-		if sw.Dated() || sw.Timestamp <= 0 {
-			continue
-		}
+	for _, sw := range stale {
 		b := uint64(sw.Timestamp)
-		stale[id] = sw
 		if !seen[b] {
 			seen[b] = true
 			blocks = append(blocks, b)
 		}
 	}
 	if len(stale) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	times := idx.blockTimes(ctx, blocks)
 	if len(times) == 0 {
-		return len(stale), fmt.Errorf("no block header answered for %d blocks", len(blocks))
+		return 0, len(stale), fmt.Errorf("no block header answered for %d blocks", len(blocks))
 	}
-	healed := 0
 	for id, sw := range stale {
 		block := uint64(sw.Timestamp)
 		ts, ok := times[block]
@@ -163,20 +163,28 @@ func (idx *Indexer) healSwapTimes(ctx context.Context) (int, error) {
 		healed++
 	}
 	idx.logf("[indexer] swap times healed — %d of %d rows dated from their block header", healed, len(stale))
-	return len(stale) - healed, nil
+	return healed, len(stale) - healed, nil
 }
 
-// keepSwapTimes runs the heal until every stored swap has a real time, then
-// stops. New swaps are dated as they arrive, so the only way this runs twice is
-// an RPC that was unreachable the first time.
+// keepSwapTimes runs the heal until no row is left holding a block number where
+// a time belongs, then stops. New swaps are dated as they arrive, so this only
+// has work on a store an older build wrote.
+//
+// One pass covers a bounded window, so a long history takes several. It repeats
+// immediately while a pass is still dating rows and waits only when one made no
+// progress — a heal that stopped after its first window would leave everything
+// past it undated, which is the same invisibility by a smaller margin.
 func (idx *Indexer) keepSwapTimes(ctx context.Context) {
 	for {
-		stale, err := idx.healSwapTimes(ctx)
+		healed, stale, err := idx.healSwapTimes(ctx)
 		if stale == 0 && err == nil {
 			return
 		}
 		if err != nil {
 			idx.logf("[indexer] swap times: %v (%d rows still undated)", err, stale)
+		}
+		if healed > 0 && err == nil {
+			continue
 		}
 		select {
 		case <-ctx.Done():

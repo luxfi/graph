@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -185,7 +186,7 @@ func TestHealDatesTheHistory(t *testing.T) {
 	})
 	idx := NewWithConfig(Config{RPC: chainAt(t, mined, nil).URL}, s)
 
-	left, err := idx.healSwapTimes(context.Background())
+	_, left, err := idx.healSwapTimes(context.Background())
 	if err != nil || left != 0 {
 		t.Fatalf("heal left %d rows undated: %v", left, err)
 	}
@@ -201,8 +202,43 @@ func TestHealDatesTheHistory(t *testing.T) {
 		t.Errorf("an already-dated row was rewritten: %+v", n)
 	}
 	// Idempotent: a second run has nothing to do and must not re-date anything.
-	if left, err := idx.healSwapTimes(context.Background()); left != 0 || err != nil {
+	if _, left, err := idx.healSwapTimes(context.Background()); left != 0 || err != nil {
 		t.Errorf("second heal reported %d undated rows: %v", left, err)
+	}
+}
+
+// The rows needing repair are the ones a newest-first window never contains.
+//
+// An undated row holds a block number where a time belongs, and a block number
+// is small beside a unix second, so ordering by timestamp sorts every broken row
+// behind every correct one. A heal that read the newest rows therefore looked
+// straight past its own subject the moment a full window of dated rows existed:
+// it found nothing stale, reported success and stopped, and a million blocks of
+// trade history stayed dated to 1970 — indexed, and invisible on every
+// newest-first list the exchange draws.
+func TestHealFindsRowsBuriedUnderDatedOnes(t *testing.T) {
+	const mined = 1767225600 + 7200
+	s := newMemSQLiteStore(t)
+	// One undated row, then more dated rows than a single window would hold, so
+	// the undated one is only reachable by asking for undated rows.
+	s.SeedSwap("0xburied#0x1", &storage.SeedSwapData{
+		Timestamp: 1136227, Pool: "0xpool", Amount0: "1", Amount1: "-2", AmountUSD: "0",
+	})
+	for i := 0; i < maxValuedSwaps+16; i++ {
+		s.SeedSwap(fmt.Sprintf("0xdated#%d", i), &storage.SeedSwapData{
+			Timestamp: mined + int64(i), Block: uint64(100 + i),
+			Pool: "0xpool", Amount0: "1", Amount1: "-2", AmountUSD: "0",
+		})
+	}
+	idx := NewWithConfig(Config{RPC: chainAt(t, mined, nil).URL}, s)
+
+	healed, left, err := idx.healSwapTimes(context.Background())
+	if err != nil || left != 0 || healed != 1 {
+		t.Fatalf("heal dated %d rows and left %d undated (%v) — the buried row was not found", healed, left, err)
+	}
+	got := s.UndatedSwapsRaw(10)
+	if len(got) != 0 {
+		t.Errorf("%d rows still hold a block number where a time belongs", len(got))
 	}
 }
 
