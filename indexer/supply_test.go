@@ -111,29 +111,34 @@ func TestNativeSupplySurvivesAStaleCopy(t *testing.T) {
 	}
 }
 
-// Volume for all time is every day added up, not the newest window summed.
+// Volume for all time is the whole table, not the window a pass reads.
 //
 // A pass values a bounded slice of the swap table because that table grows
 // forever. The bound is right for the pass and wrong for the field the wire
-// calls total volume: on a chain with a million swaps it reported the last
-// twelve percent and called it everything. The day rows are written once and
-// kept, so their sum is the whole history at the cost of a row per day.
-func TestFactoryVolumeCountsEveryDay(t *testing.T) {
+// calls total volume. Summing the day series does not escape it — those rows
+// are folded from the same window, so their sum is that window again. This
+// gives the store more trades than any window would carry and asks it what has
+// traded.
+func TestFactoryVolumeCoversEveryTrade(t *testing.T) {
 	s := newMemSQLiteStore(t)
-	idx := NewWithConfig(Config{RPC: chainAt(t, 1767225600, nil).URL}, s)
 
-	// Three days the indexer has seen, only one of which a recent window covers.
-	for i, v := range []string{"1000.00", "2000.00", "500.00"} {
-		s.SetEntity(storage.FactoryDay, fmt.Sprintf("1-%d", 20000+i), map[string]interface{}{
-			"id": fmt.Sprintf("1-%d", 20000+i), "date": (20000 + i) * 86400, "volumeUSD": v,
+	for i, usd := range []string{"1000.00", "2000.00", "500.00"} {
+		s.SeedSwap(fmt.Sprintf("0xabc#%d", i), &storage.SeedSwapData{
+			Timestamp: int64(1767225600 + i*86400),
+			Block:     uint64(100 + i),
+			Pool:      "0xpool",
+			AmountUSD: usd,
 		})
 	}
 
-	got, err := idx.factoryVolume()
+	traded, volume, err := s.Traded()
 	if err != nil {
-		t.Fatalf("factoryVolume: %v", err)
+		t.Fatalf("Traded: %v", err)
 	}
-	if got != 3500 {
-		t.Errorf("volume = %v, want 3500 — a day outside the window still traded", got)
+	if traded != 3 {
+		t.Errorf("trades = %d, want 3", traded)
+	}
+	if volume != 3500 {
+		t.Errorf("volume = %v, want 3500 \u2014 a trade outside the window still traded", volume)
 	}
 }
