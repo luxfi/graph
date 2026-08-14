@@ -194,8 +194,14 @@ func down(amount *big.Int, pct float64) *big.Int {
 	return div10k(amount, f)
 }
 
+// up inflates a bound and stops at what a word holds. A bound wider than the
+// type can express is not a wider bound; it is a different call.
 func up(amount *big.Int, pct float64) *big.Int {
-	return div10k(amount, 10000+bps(pct))
+	n := div10k(amount, 10000+bps(pct))
+	if n.Cmp(maxWord) > 0 {
+		return new(big.Int).Set(maxWord)
+	}
+	return n
 }
 
 func bps(pct float64) int64 { return int64(math.Round(pct * 100)) }
