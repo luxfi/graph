@@ -807,6 +807,41 @@ func (s *Store) RecentSwapsRaw(limit int) map[string]*SeedSwapData {
 	return out
 }
 
+// UndatedSwapsRaw returns up to `limit` swaps that still hold a block number
+// where a time belongs, keyed by id.
+//
+// It asks for them by the property that identifies them — no swap is mined in
+// block 0, so an unset block is exactly the older build's row — rather than by
+// taking a window of the newest. The newest is the one window they are never
+// in: an undated row holds a block number, block numbers are small beside unix
+// seconds, so ordering by timestamp descending sorts every row needing repair
+// to the far end of the table, behind every row already correct.
+func (s *Store) UndatedSwapsRaw(limit int) map[string]*SeedSwapData {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]*SeedSwapData{}
+	// A row's block lives in the JSON document; only id, timestamp and pool are
+	// columns. Ascending timestamp puts the undated rows first for the same
+	// reason descending puts them last, so the scan reaches them immediately and
+	// the Dated test below decides.
+	rows, err := s.db.Query("SELECT id, data FROM swaps ORDER BY timestamp ASC LIMIT ?", limit)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			continue
+		}
+		var sw SeedSwapData
+		if json.Unmarshal([]byte(raw), &sw) == nil && !sw.Dated() && sw.Timestamp > 0 {
+			out[id] = &sw
+		}
+	}
+	return out
+}
+
 // TokensRaw returns every stored token keyed by address.
 func (s *Store) TokensRaw() map[string]*SeedTokenData {
 	s.mu.RLock()
