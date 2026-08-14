@@ -17,16 +17,17 @@ type Store struct {
 	dataDir string
 	mu      sync.RWMutex
 
-	factories map[string]*SeedFactoryData
-	bundles   map[string]*SeedBundleData
-	tokens    map[string]*SeedTokenData
-	pools     map[string]*SeedPoolData
-	swaps     map[string]*SeedSwapData
-	mints     map[string]interface{}
-	burns     map[string]interface{}
-	ticks     map[string]interface{}
-	positions map[string]interface{}
-	generic   map[string]interface{}
+	factories     map[string]*SeedFactoryData
+	bundles       map[string]*SeedBundleData
+	tokens        map[string]*SeedTokenData
+	pools         map[string]*SeedPoolData
+	swaps         map[string]*SeedSwapData
+	pricedThrough int64
+	mints         map[string]interface{}
+	burns         map[string]interface{}
+	ticks         map[string]interface{}
+	positions     map[string]interface{}
+	generic       map[string]interface{}
 
 	lastBlock uint64
 }
@@ -439,6 +440,43 @@ func (s *Store) PoolsRaw() map[string]*SeedPoolData {
 		out[id] = &c
 	}
 	return out
+}
+
+// SwapsAfter returns up to limit swaps stored later than ts, oldest first.
+func (s *Store) SwapsAfter(ts int64, limit int) map[string]*SeedSwapData {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids := make([]string, 0, len(s.swaps))
+	for id, sw := range s.swaps {
+		if sw.Timestamp > ts {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return s.swaps[ids[i]].Timestamp < s.swaps[ids[j]].Timestamp })
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	out := make(map[string]*SeedSwapData, len(ids))
+	for _, id := range ids {
+		c := *s.swaps[id]
+		out[id] = &c
+	}
+	return out
+}
+
+// PricedThrough is the newest trade time a valuation pass has reached walking
+// forward from the start of the table.
+func (s *Store) PricedThrough() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pricedThrough
+}
+
+// SetPricedThrough records how far forward the pass has now valued.
+func (s *Store) SetPricedThrough(ts int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pricedThrough = ts
 }
 
 // Traded reports every trade the store holds and what they were worth.

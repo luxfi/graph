@@ -5,6 +5,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -108,4 +109,56 @@ func TestValueSwapsMovesTheColumn(t *testing.T) {
 func traded(t *testing.T, s *Store) (int64, float64, error) {
 	t.Helper()
 	return s.Traded()
+}
+
+// A history longer than any window has to be reachable a batch at a time.
+//
+// A valuation pass reads the newest N trades, so on a chain with a million of
+// them the older ones were never valued and their stored worth stayed zero —
+// which is what an all-time total was then a sum of. Walking forward from a mark
+// covers the whole table in as many passes as it takes, and stops asking once it
+// arrives.
+func TestSwapsAfterWalksTheWholeTable(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+	if err := s.Init(context.Background()); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	const total, batch = 25, 10
+	for i := 0; i < total; i++ {
+		s.SeedSwap(fmt.Sprintf("0x%02x#0x0", i), &SeedSwapData{
+			Timestamp: int64(1_700_000_000 + i), Block: uint64(i + 1), Pool: "0xpool", AmountUSD: "0",
+		})
+	}
+
+	seen, passes := map[string]bool{}, 0
+	for mark := s.PricedThrough(); ; passes++ {
+		got := s.SwapsAfter(mark, batch)
+		if len(got) == 0 {
+			break
+		}
+		for id, sw := range got {
+			seen[id] = true
+			if sw.Timestamp > mark {
+				mark = sw.Timestamp
+			}
+		}
+		s.SetPricedThrough(mark)
+		if passes > total {
+			t.Fatal("the walk did not converge — a mark that does not advance repeats a batch forever")
+		}
+	}
+	if len(seen) != total {
+		t.Errorf("reached %d of %d trades", len(seen), total)
+	}
+	if passes != 3 {
+		t.Errorf("took %d passes over %d trades in batches of %d, want 3", passes, total, batch)
+	}
+	// And the mark is durable: a restart resumes rather than starting over.
+	if got := s.PricedThrough(); got != 1_700_000_000+total-1 {
+		t.Errorf("mark = %d, want the newest trade's time", got)
+	}
 }
