@@ -66,8 +66,26 @@ func requestID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// nativeSentinelAddr is how the swap form names the chain's own coin. It is not
+// a contract; the quoter maps it onto the wrapped token because that is what the
+// pools hold. Offering it is what makes selling native LUX possible at all, and
+// it is the commonest trade on the exchange.
+const nativeSentinelAddr = "0x0000000000000000000000000000000000000000"
+
 // HandleSwappableTokens answers the swap form's token list for one chain.
-func HandleSwappableTokens(store *storage.Store, chainID int64) http.HandlerFunc {
+//
+// Swappable means a pool holds it. That is the whole rule, and it is the book's
+// own answer rather than a list somebody maintains: you can trade a token
+// exactly when there is somewhere to trade it.
+//
+// Listing every indexed Token instead put four kinds of thing in a picker that
+// nobody can swap — a Uniswap-v2 PAIR is itself an ERC-20, so are v3 position
+// receipts, vault shares and an NFT collection, and all four were offered as
+// assets. Pool membership excludes all of them without naming any of them.
+//
+// `native` is the wrapped token, so the sentinel is offered under the chain's
+// own coin symbol whenever a pool holds the wrapped one.
+func HandleSwappableTokens(store *storage.Store, chainID int64, coin, native string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// The client sends the chain it is looking at. Honour it when it does;
 		// this process indexes one chain, so a request for another is a question
@@ -92,10 +110,45 @@ func HandleSwappableTokens(store *storage.Store, chainID int64) http.HandlerFunc
 			id = n
 		}
 
+		// Which tokens a pool actually holds. Anything else in the token table
+		// is a contract this indexer met, not an asset anyone can trade.
+		held := map[string]bool{}
+		for _, p := range store.PoolsRaw() {
+			if p == nil {
+				continue
+			}
+			held[strings.ToLower(p.Token0)] = true
+			held[strings.ToLower(p.Token1)] = true
+		}
+
 		raw := store.TokensRaw()
 		out := make([]swapToken, 0, len(raw))
+
+		// The coin comes first, and comes from the wrapped token's own row —
+		// its decimals are the coin's decimals, and a sentinel with the wrong
+		// scale misprices every trade that starts in native.
+		if wrapped := strings.ToLower(native); wrapped != "" && held[wrapped] {
+			if t := raw[wrapped]; t != nil {
+				sym := coin
+				if sym == "" {
+					sym = strings.TrimPrefix(t.Symbol, "W")
+				}
+				out = append(out, swapToken{
+					Address:  nativeSentinelAddr,
+					ChainID:  id,
+					Name:     sym,
+					Symbol:   sym,
+					Decimals: t.Decimals,
+					Project: swapProject{
+						Logo:        swapLogo{URL: iconURL(sym)},
+						SafetyLevel: "VERIFIED",
+					},
+				})
+			}
+		}
+
 		for addr, t := range raw {
-			if t == nil || t.Symbol == "" {
+			if t == nil || t.Symbol == "" || !held[strings.ToLower(addr)] {
 				continue
 			}
 			out = append(out, swapToken{
