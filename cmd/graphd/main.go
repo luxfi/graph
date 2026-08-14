@@ -275,7 +275,16 @@ func securityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		// The headers the request actually asked about, rather than a list of
+		// the ones someone thought to name. A browser refuses the whole call
+		// over one missing name — the exchange sends x-api-key — and a literal
+		// "*" does not help, because Safari does not honour the wildcard here.
+		if asked := r.Header.Get("Access-Control-Request-Headers"); asked != "" {
+			w.Header().Set("Access-Control-Allow-Headers", asked)
+		} else {
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		}
+		w.Header().Set("Vary", "Origin, Access-Control-Request-Headers")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Cache-Control", "no-store")
