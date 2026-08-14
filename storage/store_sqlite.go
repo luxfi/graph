@@ -157,6 +157,61 @@ func dollars(s string) float64 {
 	return v
 }
 
+// SwapsAfter returns up to limit swaps stored later than ts, oldest first.
+//
+// The mirror of RecentSwapsRaw: one reads the head of the table, this reads
+// forward from wherever a caller last got to, so a history longer than any
+// window can be walked a batch at a time and finish.
+func (s *Store) SwapsAfter(ts int64, limit int) map[string]*SeedSwapData {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]*SeedSwapData{}
+	rows, err := s.db.Query(
+		"SELECT id, data FROM swaps WHERE timestamp > ? ORDER BY timestamp ASC LIMIT ?", ts, limit)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			continue
+		}
+		var sw SeedSwapData
+		if json.Unmarshal([]byte(raw), &sw) != nil {
+			continue
+		}
+		out[id] = &sw
+	}
+	return out
+}
+
+// PricedThrough is the newest trade time a valuation pass has reached walking
+// forward from the start of the table, or 0 for a store that has never walked.
+//
+// A mark, not a test of the rows: a trade whose tokens reach no stablecoin
+// cannot be priced at all, and asking "which rows still have no value" would
+// hand back the same unpriceable trades every pass forever. Having LOOKED is
+// monotone where having VALUED is not, so the mark is what is remembered.
+func (s *Store) PricedThrough() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var v string
+	if err := s.db.QueryRow("SELECT value FROM meta WHERE key='pricedThrough'").Scan(&v); err != nil {
+		return 0
+	}
+	n, _ := strconv.ParseInt(v, 10, 64)
+	return n
+}
+
+// SetPricedThrough records how far forward the pass has now valued.
+func (s *Store) SetPricedThrough(ts int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.db.Exec("INSERT OR REPLACE INTO meta(key, value) VALUES('pricedThrough', ?)",
+		strconv.FormatInt(ts, 10))
+}
+
 // Traded reports every trade the store holds and what they were worth.
 //
 // Over the whole table, not over a window: a valuation pass reads a bounded

@@ -275,7 +275,7 @@ func TestTradesAreChronological(t *testing.T) {
 	trade0(idx, "0xaa#0x10", day0+30, 12, 100, 1000) // same block, later log
 
 	vps := []valuedPool{{id: pVol, t0: tLUX, t1: tZOO, bal0: 4000, bal1: 40000, held0: true, held1: true}}
-	trades := idx.valuedTrades(vps, idx.store.TokensRaw(), map[string]float64{tLUX: 0.5})
+	trades, _ := idx.valuedTrades(vps, idx.store.TokensRaw(), map[string]float64{tLUX: 0.5})
 
 	if len(trades) != 4 {
 		t.Fatalf("got %d trades, want 4", len(trades))

@@ -71,13 +71,33 @@ func (t *trade) usd() (float64, bool) {
 // close is the last, and the store hands back a map, whose iteration order is
 // deliberately random. Ordering by (time, block, log index) is the chain's own
 // order — a log index is unique and increasing within its block.
-func (idx *Indexer) valuedTrades(vps []valuedPool, tokens map[string]*storage.SeedTokenData, prices map[string]float64) []trade {
+//
+// It reports how far forward through history the tail read reached, so a caller
+// that has since written the values can remember it.
+func (idx *Indexer) valuedTrades(vps []valuedPool, tokens map[string]*storage.SeedTokenData, prices map[string]float64) (out []trade, reached int64) {
 	byPool := map[string]*valuedPool{}
 	for i := range vps {
 		byPool[vps[i].id] = &vps[i]
 	}
-	swaps := idx.store.RecentSwapsRaw(maxValuedSwaps)
-	out := make([]trade, 0, len(swaps))
+	// Both ends of what the pass has not seen.
+	//
+	// The head keeps new trades priced as they arrive. The tail walks forward
+	// from wherever the last pass got to, so a table longer than any window is
+	// covered a batch at a time and eventually entirely — without it, a chain
+	// with a million trades had the newest fifty thousand priced and the rest
+	// stored at zero, which is what all-time volume was then a sum of, and what
+	// every day before the window was missing from its chart.
+	//
+	// The two meet: once the mark passes the newest trade the tail read returns
+	// nothing and the walk is over, for good, at no further cost.
+	swaps := wholeDays(idx.store.RecentSwapsRaw(maxValuedSwaps), maxValuedSwaps, oldest)
+	for id, sw := range wholeDays(idx.store.SwapsAfter(idx.store.PricedThrough(), maxValuedSwaps), maxValuedSwaps, newest) {
+		swaps[id] = sw
+		if sw.Timestamp > reached {
+			reached = sw.Timestamp
+		}
+	}
+	out = make([]trade, 0, len(swaps))
 	for id, sw := range swaps {
 		vp := byPool[strings.ToLower(sw.Pool)]
 		if vp == nil {
@@ -98,7 +118,7 @@ func (idx *Indexer) valuedTrades(vps []valuedPool, tokens map[string]*storage.Se
 		}
 		return logIndexOf(a.id) < logIndexOf(b.id)
 	})
-	return out
+	return out, reached
 }
 
 // logIndexOf reads the log index out of a swap's id, which every handler writes
@@ -112,6 +132,54 @@ func logIndexOf(id string) uint64 {
 		return 0
 	}
 	return n
+}
+
+// oldest and newest name which end of a batch a read cut.
+const (
+	oldest = true
+	newest = false
+)
+
+// wholeDays drops the day the read's own cut falls in.
+//
+// A day series row is REPLACED by the pass that writes it, so a pass that saw
+// half a day would put half a day's volume where a whole day's had been. Both
+// reads cut somewhere — the head window at its old end, the tail batch at its
+// new one — and the day the cut lands in is the only one either read can hold
+// partially. Dropping it means the pass writes a day when it can write all of
+// it, and the day comes back whole on a later read from the other side.
+//
+// A read that came back short of its limit was not cut at all — it reached the
+// end of the table — and keeps everything. A batch that is one day long is also
+// kept entire: half a day is better than none, and on a chain that busy the next
+// pass carries the rest.
+func wholeDays(swaps map[string]*storage.SeedSwapData, limit int, cut bool) map[string]*storage.SeedSwapData {
+	if len(swaps) < limit {
+		return swaps
+	}
+	var lo, hi int64
+	for _, sw := range swaps {
+		d := dayStart(sw.Timestamp)
+		if lo == 0 || d < lo {
+			lo = d
+		}
+		if d > hi {
+			hi = d
+		}
+	}
+	if lo == hi {
+		return swaps
+	}
+	drop := hi
+	if cut == oldest {
+		drop = lo
+	}
+	for id, sw := range swaps {
+		if dayStart(sw.Timestamp) == drop {
+			delete(swaps, id)
+		}
+	}
+	return swaps
 }
 
 // cell accumulates one subject's activity inside one UTC day.

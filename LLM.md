@@ -86,6 +86,21 @@ a fix that looked right and changed nothing. `Factory.txCount` is a separate
 question (every interaction, mints and burns included) and stays with the
 handlers that see them.
 
+**A pass reads BOTH ENDS of what it has not seen.** The head
+(`RecentSwapsRaw`) keeps arriving trades priced. The tail (`SwapsAfter`) walks
+forward from `PricedThrough`, a mark in `meta`, so a table longer than any window
+is covered a batch at a time and then never asked about again. It is a mark and
+not a "which rows are still zero" query on purpose: a trade whose tokens reach no
+stablecoin can NEVER be priced, and that query would hand back the same
+unpriceable trades every pass forever. Having looked is monotone; having valued
+is not. The mark moves only after `ValueSwaps` returns without error.
+
+`wholeDays` drops the day each read's own cut falls in, because a day row is
+REPLACED by the pass that writes it and half a day would land where a whole one
+was. A read that came back short of its limit was not cut and keeps everything —
+that condition is the whole test; without it the pass discards its oldest real
+day on every chain small enough to fit in one window.
+
 ## The day series (series.go) is a SECOND FOLD over the valuation pass's trades
 
 `tokenDayDatas` / `poolDayDatas` / `uniswapDayDatas` are rolled out of the swaps
