@@ -460,6 +460,26 @@ func (s *Store) RecentSwapsRaw(limit int) map[string]*SeedSwapData {
 	return out
 }
 
+// UndatedSwapsRaw returns up to `limit` swaps that still hold a block number
+// where a time belongs. See the sqlite implementation for why these cannot be
+// found by taking a window of the newest.
+func (s *Store) UndatedSwapsRaw(limit int) map[string]*SeedSwapData {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]*SeedSwapData{}
+	for id, sw := range s.swaps {
+		if len(out) >= limit {
+			break
+		}
+		if sw.Dated() || sw.Timestamp <= 0 {
+			continue
+		}
+		c := *sw
+		out[id] = &c
+	}
+	return out
+}
+
 // TokensRaw returns every stored token keyed by address.
 func (s *Store) TokensRaw() map[string]*SeedTokenData {
 	s.mu.RLock()
