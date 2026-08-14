@@ -529,3 +529,28 @@ func TestSwapClampsSlippageToAPercentage(t *testing.T) {
 	check(t, "EXACT_OUTPUT", "-101", "1000", 5, big.NewInt(1000))
 	check(t, "EXACT_INPUT", "1000", "1000", 5, big.NewInt(0))
 }
+
+// The quoter prices constant-product pairs as well as concentrated ones, and
+// this builds only the concentrated router's calls. A pair has no fee tier to
+// pack into a path, so the refusal names the venue rather than claiming a
+// field is missing — the field does not belong on that hop.
+func TestSwapNamesTheVenueItCannotBuild(t *testing.T) {
+	code, out := serveSwap(t, `{"quote":{"chainId":96369,"swapper":"`+trader+`",
+		"input":{"token":"`+lusd+`","amount":"1000"},"output":{"token":"`+cyrus+`","amount":"1000"},
+		"tradeType":"EXACT_INPUT","slippage":0.5,
+		"route":[[{"type":"v2-pool","address":"0x0000000000000000000000000000000000000001",
+			"tokenIn":{"address":"`+lusd+`","chainId":96369,"symbol":"LUSD","decimals":"18"},
+			"tokenOut":{"address":"`+cyrus+`","chainId":96369,"symbol":"CYRUS","decimals":"6"},
+			"reserve0":{"quotient":"1000"},"reserve1":{"quotient":"1000"},
+			"amountIn":"1000","amountOut":"1000"}]]}}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a venue this endpoint cannot build", code)
+	}
+	d, _ := out["detail"].(string)
+	if !strings.Contains(d, "v2-pool") {
+		t.Errorf("detail = %q, want it to name the venue", d)
+	}
+	if strings.Contains(d, "missing") {
+		t.Errorf("detail = %q — nothing is missing; a pair has no fee tier", d)
+	}
+}
