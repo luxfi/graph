@@ -83,6 +83,16 @@ fix erasing the number it exists to correct.
 drifted fifty times apart — the protocol summing every trade ever indexed while
 each pool summed the window a pass had just read.
 
+**The trade count comes from the same read as the volume beside it.** Pool, token
+and factory counts are all folds of `TradedByPool()`; `bumpSwapCounts` and
+`bumpFactory` are gone. A tally kept as events arrive drifts on every restart and
+re-index — the protocol claimed 16,062 trades over pools holding 14,827, and a
+token reported $74,100 of volume next to a count of zero. `txCount` is therefore
+TRADES, not every interaction: mints and burns no longer count toward it, because
+a reader comparing that column to the volume column is owed the number that
+produced it. What a create handler owns is the registration; the counts are
+derived, like `poolCount` before them.
+
 **Total volume is not the pass's total.** `maxValuedSwaps` bounds what one
 valuation pass values, because the swap table grows forever. Summing that window
 answers for the newest trades only. Summing the day series does not escape it
