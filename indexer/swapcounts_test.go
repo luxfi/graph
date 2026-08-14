@@ -2,15 +2,21 @@ package indexer
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/luxfi/graph/storage"
 )
 
 // A swap must be COUNTED, not merely stored. The indexer recorded every swap via
-// SeedSwap but nothing incremented txCount, so the explorer served 0 for every
-// pool, every token and all-time trades — the table rendered a TXNS column of
-// zeros next to real volume.
+// SeedSwap and nothing counted them, so the explorer served 0 for every pool,
+// every token and all-time trades — a TXNS column of zeros next to real volume.
+//
+// It is counted by asking the store rather than by tallying as they arrive. A
+// tally drifts on every restart and re-index, which is how the protocol came to
+// claim 16,062 trades over pools holding 14,827 of them, and how a token could
+// report $74,100 of volume beside a count of zero. The volume and the count are
+// read together now, so the two columns cannot disagree.
 
 const (
 	testPool   = "0x1c000d5dbe1246fb84ad431e933e5563f212a62b" // LUX/LZOO
@@ -57,60 +63,45 @@ func tokenTxCount(t *testing.T, idx *Indexer, addr string) int64 {
 	return tk.TxCount
 }
 
-func TestBumpSwapCounts_CountsPoolTokensAndFactory(t *testing.T) {
+func TestSwapsAreCountedWhereTheirVolumeIs(t *testing.T) {
 	idx := newTestIndexer(t)
 
-	if got := poolTxCount(t, idx, testPool); got != 0 {
-		t.Fatalf("pool txCount before = %d, want 0", got)
+	byPool, err := idx.store.TradedByPool()
+	if err != nil {
+		t.Fatalf("TradedByPool: %v", err)
+	}
+	if got := byPool[testPool].Trades; got != 0 {
+		t.Fatalf("pool trades before = %d, want 0", got)
 	}
 
-	idx.bumpSwapCounts(testPool)
-
-	if got := poolTxCount(t, idx, testPool); got != 1 {
-		t.Errorf("pool txCount = %d, want 1", got)
-	}
-	if got := tokenTxCount(t, idx, testToken0); got != 1 {
-		t.Errorf("token0 txCount = %d, want 1", got)
-	}
-	if got := tokenTxCount(t, idx, testToken1); got != 1 {
-		t.Errorf("token1 txCount = %d, want 1", got)
-	}
-
-	f, _ := idx.store.GetFactory(nil, "1")
-	m, ok := f.(map[string]interface{})
-	if !ok {
-		t.Fatalf("factory missing after a counted swap")
-	}
-	if got := asInt64(m["txCount"]); got != 1 {
-		t.Errorf("factory txCount = %d, want 1", got)
-	}
-}
-
-func TestBumpSwapCounts_Accumulates(t *testing.T) {
-	idx := newTestIndexer(t)
 	for i := 0; i < 5; i++ {
-		idx.bumpSwapCounts(testPool)
+		idx.store.SeedSwap(fmt.Sprintf("0xfeed#%d", i), &storage.SeedSwapData{
+			Timestamp: int64(1767225600 + i), Block: uint64(10 + i), Pool: testPool, AmountUSD: "10.00",
+		})
 	}
-	if got := poolTxCount(t, idx, testPool); got != 5 {
-		t.Errorf("pool txCount = %d, want 5", got)
+
+	byPool, err = idx.store.TradedByPool()
+	if err != nil {
+		t.Fatalf("TradedByPool: %v", err)
 	}
-	if got := tokenTxCount(t, idx, testToken0); got != 5 {
-		t.Errorf("token0 txCount = %d, want 5", got)
+	if got := byPool[testPool]; got.Trades != 5 || got.VolumeUSD != 50 {
+		t.Errorf("pool = %+v, want 5 trades worth 50 — the count and the volume are one read", got)
 	}
 }
 
-// A swap whose pool was never registered is dropped upstream; bumping on it must
-// not invent a pool entity (that is the phantom-pool bypass the handlers gate).
-func TestBumpSwapCounts_UnknownPoolIsNoop(t *testing.T) {
+// A swap whose pool was never registered is dropped upstream, and counting must
+// not invent a pool entity for it — that is the phantom-pool bypass the handlers
+// gate. Nothing here writes a pool, so an unknown pool simply has no row to
+// stand beside its trades.
+func TestCountingInventsNoPool(t *testing.T) {
 	idx := newTestIndexer(t)
 	before := len(idx.store.PoolsRaw())
 
-	idx.bumpSwapCounts("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	idx.store.SeedSwap("0xghost#0", &storage.SeedSwapData{
+		Timestamp: 1767225600, Block: 11, Pool: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", AmountUSD: "1.00",
+	})
 
 	if after := len(idx.store.PoolsRaw()); after != before {
 		t.Errorf("pool count = %d, want %d — an unknown pool must not be created", after, before)
-	}
-	if got := poolTxCount(t, idx, testPool); got != 0 {
-		t.Errorf("known pool txCount = %d, want 0", got)
 	}
 }

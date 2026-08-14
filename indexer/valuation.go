@@ -183,6 +183,7 @@ func (idx *Indexer) revalue(parent context.Context) {
 	tokenTVL := map[string]float64{}
 	tokenBal := map[string]float64{}
 	tokenVol := map[string]float64{}
+	tokenTx := map[string]int64{}
 	poolTVL := map[string]float64{}
 	ratio := map[string]float64{}
 	swapUSD := map[string]string{}
@@ -263,11 +264,14 @@ func (idx *Indexer) revalue(parent context.Context) {
 		p.Token1Price = fmtRatio(vp.bal1, vp.bal0)
 		if t, ok := traded[strings.ToLower(vp.id)]; ok {
 			p.VolumeUSD = fmtUSD(t.VolumeUSD)
-			// A token's volume is what the pools holding it have traded. Both
-			// sides of a trade count toward their own token, which is what the
-			// per-leg fold this replaced did and what the wire format means.
+			p.TxCount = t.Trades
+			// A token's volume and trade count are those of the pools holding
+			// it. Both sides of a trade count toward their own token, which is
+			// what the per-leg fold this replaced did and what the wire means.
 			tokenVol[vp.t0] += t.VolumeUSD
 			tokenVol[vp.t1] += t.VolumeUSD
+			tokenTx[vp.t0] += t.Trades
+			tokenTx[vp.t1] += t.Trades
 		} else if p.VolumeUSD == "" {
 			p.VolumeUSD = fmtUSD(0)
 		}
@@ -287,6 +291,7 @@ func (idx *Indexer) revalue(parent context.Context) {
 		}
 		t.TotalValueLockedUSD = fmtUSD(tvl)
 		t.VolumeUSD = fmtUSD(vol)
+		t.TxCount = tokenTx[low]
 		t.DerivedETH = derivedNative(price, nativeUSD, hasPrice)
 		idx.store.SeedToken(addr, t)
 	}
@@ -308,9 +313,15 @@ func (idx *Indexer) revalue(parent context.Context) {
 	// restart, re-index and duplicate create, and there is no reason to guess a
 	// number the store can be asked for.
 	//
-	// txCount counts every interaction — mints and burns as well as trades — and
-	// is carried through from the handlers that see them. Volume is a different
-	// question and gets a different answer: what the whole table has traded.
+	// The count and the volume beside it are one read.
+	//
+	// Counted by the handlers instead, they came apart: a token could report
+	// $74,100 of volume over zero transactions, and the protocol claimed 16,062
+	// against its own pools' 14,827 — an accumulator drifts on every restart and
+	// re-index, which is the same argument that made poolCount derived. So the
+	// number under "transactions" is now the number of trades that produced the
+	// volume next to it, mints and burns excluded, because that is what a reader
+	// comparing the two columns is owed.
 	//
 	// A pass values a bounded slice of that table, newest first, because it grows
 	// forever and rescanning it would cost more every day the chain lives. The
@@ -318,14 +329,9 @@ func (idx *Indexer) revalue(parent context.Context) {
 	// Summing the day series does not escape it either — those rows are folded
 	// from the same window, so their sum IS the window. Summing a column costs
 	// one scan and answers for every trade ever indexed.
-	f, _ := idx.store.GetFactory(nil, "1")
-	var txCount int64
-	if m, ok := f.(map[string]interface{}); ok {
-		txCount = asInt64(m["txCount"])
-	}
 	idx.store.SeedFactory("1", &storage.SeedFactoryData{
 		PoolCount:           int64(len(pools)),
-		TxCount:             txCount,
+		TxCount:             allTimeTrades,
 		TotalValueLockedUSD: fmtUSD(totalTVL),
 		TotalVolumeUSD:      fmtUSD(allTimeVol),
 	})

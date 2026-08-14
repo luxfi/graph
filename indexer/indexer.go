@@ -717,7 +717,6 @@ func (idx *Indexer) handleSwapV2(l *logEntry, blockNum uint64, txHash, logIdx st
 		AmountUSD: "0",
 		Sender:    sender,
 	})
-	idx.bumpSwapCounts(l.Address)
 }
 
 func (idx *Indexer) handleSwapV3(l *logEntry, blockNum uint64, txHash, logIdx string) {
@@ -748,7 +747,6 @@ func (idx *Indexer) handleSwapV3(l *logEntry, blockNum uint64, txHash, logIdx st
 		AmountUSD: "0",
 		Sender:    sender,
 	})
-	idx.bumpSwapCounts(l.Address)
 }
 
 func (idx *Indexer) handlePairCreated(ctx context.Context, l *logEntry) {
@@ -778,7 +776,6 @@ func (idx *Indexer) handlePairCreated(ctx context.Context, l *logEntry) {
 	})
 	idx.token(ctx, token0)
 	idx.token(ctx, token1)
-	idx.bumpFactory()
 }
 
 func (idx *Indexer) handlePoolCreated(ctx context.Context, l *logEntry) {
@@ -809,7 +806,6 @@ func (idx *Indexer) handlePoolCreated(ctx context.Context, l *logEntry) {
 	})
 	idx.token(ctx, token0)
 	idx.token(ctx, token1)
-	idx.bumpFactory()
 }
 
 func (idx *Indexer) handleTransfer(ctx context.Context, l *logEntry, txHash, logIdx string) {
@@ -832,72 +828,6 @@ func decodeInt256(data string, wordIndex int) *big.Int {
 		n.Sub(n, twoExp256)
 	}
 	return n
-}
-
-// bumpFactory increments the singleton factory ("1") transaction count — the
-// only field of the factory aggregate that IS a running total of events, and so
-// the only one the log handlers own.
-//
-// poolCount and the USD aggregates are DERIVED, not accumulated: the valuation
-// pass reads the true pool count out of the store and recomputes TVL/volume
-// from on-chain balances every interval. An accumulator for those drifts on
-// every restart, re-index and duplicate create, and there is no reason to count
-// something the store can simply be asked for. SeedFactory is INSERT OR REPLACE,
-// so this read-modify-write carries the derived fields through untouched.
-// bumpSwapCounts records that one swap touched a pool: the pool's own txCount,
-// both of its tokens', and the factory's. Every swap handler (V2/V3/V4) calls
-// this and nothing else counts swaps, so the four aggregates cannot drift apart.
-//
-// Without it the swaps were stored but nothing counted them, and every txCount
-// the explorer served read 0 — pools, tokens and "all-time trades" alike.
-func (idx *Indexer) bumpSwapCounts(poolID string) {
-	pools := idx.store.PoolsRaw()
-	p, ok := pools[strings.ToLower(poolID)]
-	if !ok {
-		if p, ok = pools[poolID]; !ok {
-			return // a swap from a pool we never registered is already dropped upstream
-		}
-	}
-
-	next := *p
-	next.TxCount = p.TxCount + 1
-	idx.store.SeedPool(poolID, &next)
-
-	tokens := idx.store.TokensRaw()
-	for _, addr := range []string{next.Token0, next.Token1} {
-		if addr == "" {
-			continue
-		}
-		t, ok := tokens[strings.ToLower(addr)]
-		if !ok {
-			if t, ok = tokens[addr]; !ok {
-				continue
-			}
-		}
-		nt := *t
-		nt.TxCount = t.TxCount + 1
-		idx.store.SeedToken(addr, &nt)
-	}
-
-	idx.bumpFactory()
-}
-
-func (idx *Indexer) bumpFactory() {
-	f, _ := idx.store.GetFactory(nil, "1")
-	var pc, tc int64
-	var tvl, vol string
-	if m, ok := f.(map[string]interface{}); ok {
-		pc = asInt64(m["poolCount"])
-		tc = asInt64(m["txCount"])
-		tvl = asString(m["totalValueLockedUSD"])
-		vol = asString(m["totalVolumeUSD"])
-	}
-	idx.store.SeedFactory("1", &storage.SeedFactoryData{
-		PoolCount:           pc,
-		TxCount:             tc + 1,
-		TotalValueLockedUSD: tvl,
-		TotalVolumeUSD:      vol,
-	})
 }
 
 // asString coerces a JSON-decoded value to its string form, returning "" for nil
@@ -953,7 +883,6 @@ func (idx *Indexer) handleInitializeV4(ctx context.Context, l *logEntry) {
 	})
 	idx.token(ctx, token0)
 	idx.token(ctx, token1)
-	idx.bumpFactory()
 
 	// A bound market carries a human BASE/QUOTE symbol (not the raw poolId) when
 	// BOTH currencies resolve to a clean ERC20 symbol. `assetsBound` marks the
@@ -1044,8 +973,6 @@ func (idx *Indexer) handleSwapV4(l *logEntry, blockNum uint64, txHash, logIdx st
 		AmountUSD: "0",
 		Sender:    sender,
 	})
-	idx.bumpSwapCounts(poolID)
-	idx.bumpFactory()
 }
 
 // handleDEXFill records a native-CLOB settlement (DEXFill at 0x9999). This is
