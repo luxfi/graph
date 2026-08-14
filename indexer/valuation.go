@@ -179,7 +179,7 @@ func (idx *Indexer) revalue(parent context.Context) {
 	// One read of the swap window, valued once, folded twice: into the running
 	// totals below, and into the day series (series.go). Two questions about the
 	// same trades, one answer about what each trade was worth.
-	trades := idx.valuedTrades(vps, tokens, prices)
+	trades, reached := idx.valuedTrades(vps, tokens, prices)
 	tokenTVL := map[string]float64{}
 	tokenBal := map[string]float64{}
 	tokenVol := map[string]float64{}
@@ -188,6 +188,16 @@ func (idx *Indexer) revalue(parent context.Context) {
 	swapUSD := map[string]string{}
 	poolVol := valueSwaps(trades, vps, tokenVol, swapUSD)
 	valuedRows, valuedErr := idx.store.ValueSwaps(swapUSD)
+	// How far the walk through history got, remembered only once the values are
+	// on disk. Moved before the write, a failed write would leave those trades
+	// behind the mark and unpriced for good.
+	//
+	// It is the newest trade the pass READ, not the newest it managed to price:
+	// a trade whose tokens reach no stablecoin can never be priced, and a mark
+	// that waited for one would stop at the first of them and never pass it.
+	if valuedErr == nil && reached > idx.store.PricedThrough() {
+		idx.store.SetPricedThrough(reached)
+	}
 
 	var totalTVL, totalVol float64
 	for _, vp := range vps {
