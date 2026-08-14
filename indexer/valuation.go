@@ -186,7 +186,7 @@ func (idx *Indexer) revalue(parent context.Context) {
 	poolTVL := map[string]float64{}
 	ratio := map[string]float64{}
 	swapUSD := map[string]string{}
-	poolVol := valueSwaps(trades, vps, tokenVol, swapUSD)
+	windowVol := valueSwaps(trades, vps, map[string]float64{}, swapUSD)
 	valuedRows, valuedErr := idx.store.ValueSwaps(swapUSD)
 	// How far the walk through history got, remembered only once the values are
 	// on disk. Moved before the write, a failed write would leave those trades
@@ -199,7 +199,29 @@ func (idx *Indexer) revalue(parent context.Context) {
 		idx.store.SetPricedThrough(reached)
 	}
 
-	var totalTVL, totalVol float64
+	// What every pool has traded, over the whole table, asked once.
+	//
+	// A pool's own figure and the protocol's total are one question sliced two
+	// ways, so they come from one answer. Asked separately they drifted fifty
+	// times apart: the protocol summed every trade ever indexed while each pool
+	// summed the window a pass had just read, and a landing page claimed $206,718
+	// above a list of pools claiming $4,159.
+	traded, tradedErr := idx.store.TradedByPool()
+	if tradedErr != nil {
+		idx.logf("[valuation] all-time volume unavailable, reporting this window: %v", tradedErr)
+		traded = map[string]storage.Traded{}
+		for id, v := range windowVol {
+			traded[id] = storage.Traded{VolumeUSD: v}
+		}
+	}
+	var allTimeVol float64
+	var allTimeTrades int64
+	for _, t := range traded {
+		allTimeVol += t.VolumeUSD
+		allTimeTrades += t.Trades
+	}
+
+	var totalTVL, windowTotal float64
 	for _, vp := range vps {
 		p := pools[vp.id]
 		if p == nil {
@@ -239,12 +261,17 @@ func (idx *Indexer) revalue(parent context.Context) {
 		p.TotalValueLockedUSD = fmtUSD(tvl)
 		p.Token0Price = fmtRatio(vp.bal0, vp.bal1)
 		p.Token1Price = fmtRatio(vp.bal1, vp.bal0)
-		if v, ok := poolVol[vp.id]; ok {
-			p.VolumeUSD = fmtUSD(v)
-			totalVol += v
+		if t, ok := traded[strings.ToLower(vp.id)]; ok {
+			p.VolumeUSD = fmtUSD(t.VolumeUSD)
+			// A token's volume is what the pools holding it have traded. Both
+			// sides of a trade count toward their own token, which is what the
+			// per-leg fold this replaced did and what the wire format means.
+			tokenVol[vp.t0] += t.VolumeUSD
+			tokenVol[vp.t1] += t.VolumeUSD
 		} else if p.VolumeUSD == "" {
 			p.VolumeUSD = fmtUSD(0)
 		}
+		windowTotal += windowVol[vp.id]
 		idx.store.SeedPool(vp.id, p)
 		totalTVL += tvl
 	}
@@ -296,16 +323,11 @@ func (idx *Indexer) revalue(parent context.Context) {
 	if m, ok := f.(map[string]interface{}); ok {
 		txCount = asInt64(m["txCount"])
 	}
-	traded, volume, err := idx.store.Traded()
-	if err != nil {
-		idx.logf("[valuation] all-time volume unavailable, reporting this window: %v", err)
-		traded, volume = int64(len(trades)), totalVol
-	}
 	idx.store.SeedFactory("1", &storage.SeedFactoryData{
 		PoolCount:           int64(len(pools)),
 		TxCount:             txCount,
 		TotalValueLockedUSD: fmtUSD(totalTVL),
-		TotalVolumeUSD:      fmtUSD(volume),
+		TotalVolumeUSD:      fmtUSD(allTimeVol),
 	})
 
 	// ── The day series: the same trades, grouped by the day they happened ──
@@ -332,8 +354,8 @@ func (idx *Indexer) revalue(parent context.Context) {
 	// sees one alone cannot tell which he has. The first is what this pass just
 	// valued; the second is what the chain has traded and what is served.
 	idx.logf("[valuation] %d/%d pools valued, %d tokens priced, %d swaps — TVL $%s, volume $%s of $%s over %d trades%s (%s)",
-		len(vps), len(pools), len(prices), len(trades), fmtUSD(totalTVL), fmtUSD(totalVol),
-		fmtUSD(volume), traded, priced, time.Since(started).Round(time.Millisecond))
+		len(vps), len(pools), len(prices), len(trades), fmtUSD(totalTVL), fmtUSD(windowTotal),
+		fmtUSD(allTimeVol), allTimeTrades, priced, time.Since(started).Round(time.Millisecond))
 }
 
 // readBalances asks each pool's two tokens what the pool holds. One eth_call

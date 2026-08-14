@@ -212,22 +212,42 @@ func (s *Store) SetPricedThrough(ts int64) {
 		strconv.FormatInt(ts, 10))
 }
 
-// Traded reports every trade the store holds and what they were worth.
+// Traded is a count of trades and what they were worth.
+type Traded struct {
+	Trades    int64
+	VolumeUSD float64
+}
+
+// TradedByPool reports what each pool has traded, over the whole table.
 //
-// Over the whole table, not over a window: a valuation pass reads a bounded
-// slice of this table because the table grows forever, and that bound is right
-// for the pass and wrong for a figure the wire calls all-time. Summing a column
-// costs one scan and answers for every trade ever indexed.
-func (s *Store) Traded() (int64, float64, error) {
+// One question sliced one way, and the protocol's own total is the fold of it —
+// asked separately they drifted apart by fifty times: the protocol summed every
+// trade ever indexed while each pool summed the window one pass had just read,
+// so a landing page claimed $206,718 above a list of pools claiming $4,159.
+//
+// Over the whole table, not over a window: a pass values a bounded slice because
+// the table grows forever, and that bound is right for the pass and wrong for a
+// figure the wire calls all-time. Grouping costs one scan and there are as many
+// rows out as there are pools.
+func (s *Store) TradedByPool() (map[string]Traded, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var count int64
-	var volume float64
-	err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(amountUSD), 0) FROM swaps`).Scan(&count, &volume)
+	rows, err := s.db.Query(
+		`SELECT pool, COUNT(*), COALESCE(SUM(amountUSD), 0) FROM swaps GROUP BY pool COLLATE NOCASE`)
 	if err != nil {
-		return 0, 0, fmt.Errorf("storage: total traded: %w", err)
+		return nil, fmt.Errorf("storage: traded by pool: %w", err)
 	}
-	return count, volume, nil
+	defer rows.Close()
+	out := map[string]Traded{}
+	for rows.Next() {
+		var pool string
+		var t Traded
+		if err := rows.Scan(&pool, &t.Trades, &t.VolumeUSD); err != nil {
+			continue
+		}
+		out[strings.ToLower(pool)] = t
+	}
+	return out, rows.Err()
 }
 
 // Close closes the database.
