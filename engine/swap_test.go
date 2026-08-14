@@ -279,3 +279,96 @@ func TestSwapRejectsBadRequests(t *testing.T) {
 		})
 	}
 }
+
+// A quote states its input token twice — at the top and on the first hop. One
+// that carries only the hop is still a quote, and native input must still ride
+// as value or the swap reverts with nothing in the request to explain it.
+func TestSwapReadsNativeInputFromTheHopWhenTheTopIsBlank(t *testing.T) {
+	got := swapCall(t, `{"quote":{
+		"chainId":96369,
+		"swapper":"`+trader+`",
+		"input":{"amount":"1000000000000000000"},
+		"output":{"token":"`+lusd+`","amount":"611022579164403","recipient":"`+trader+`"},
+		"tradeType":"EXACT_INPUT","slippage":0.5,
+		"route":[[{"type":"v3-pool","address":"0x37011bB281676f85962fb35C674f7E9EB7584452",
+			"tokenIn":{"address":"0x0000000000000000000000000000000000000000","chainId":96369,"symbol":"LUX","decimals":"18"},
+			"tokenOut":{"address":"`+lusd+`","chainId":96369,"symbol":"LUSD","decimals":"18"},
+			"fee":"3000","amountIn":"1000000000000000000","amountOut":"611022579164403"}]]
+	}}`)
+
+	if got["value"] != "1000000000000000000" {
+		t.Errorf("value = %v, want the input amount — the hop says the input is native", got["value"])
+	}
+}
+
+// Two hops, exact output. The path is encoded backwards here — the router works
+// out what each hop must receive by walking from the amount asked for back to
+// the amount paid — so this is the one case where reversing is the whole
+// behaviour, and the recording is what proves it reversed the fees too.
+func TestSwapExactOutputMultiHopMatchesRecording(t *testing.T) {
+	got := swapCall(t, `{"quote":{
+		"chainId":96369,
+		"swapper":"`+trader+`",
+		"input":{"token":"0x0000000000000000000000000000000000000000","amount":"94668708248511297"},
+		"output":{"token":"`+cyrus+`","amount":"1000000","recipient":"`+trader+`"},
+		"tradeType":"EXACT_OUTPUT","slippage":0.5,
+		"route":[[
+			{"type":"v3-pool","address":"0x37011bB281676f85962fb35C674f7E9EB7584452",
+			 "tokenIn":{"address":"0x0000000000000000000000000000000000000000","chainId":96369,"symbol":"LUX","decimals":"18"},
+			 "tokenOut":{"address":"`+lusd+`","chainId":96369,"symbol":"LUSD","decimals":"18"},
+			 "fee":"3000","amountIn":"94668708248511297","amountOut":"57856"},
+			{"type":"v3-pool","address":"0x0000000000000000000000000000000000000001",
+			 "tokenIn":{"address":"`+lusd+`","chainId":96369,"symbol":"LUSD","decimals":"18"},
+			 "tokenOut":{"address":"`+cyrus+`","chainId":96369,"symbol":"CYRUS","decimals":"6"},
+			 "fee":"3000","amountIn":"57856","amountOut":"1000000"}]]
+	}}`)
+
+	assertSwap(t, got, map[string]any{
+		"to":      router,
+		"from":    trader,
+		"value":   "94668708248511297",
+		"chainId": float64(luxMain),
+		"data": "0x09b81346" +
+			"0000000000000000000000000000000000000000000000000000000000000020" +
+			"0000000000000000000000000000000000000000000000000000000000000080" +
+			"0000000000000000000000009011e888251ab053b7bd1cdb598db4f9ded94714" +
+			"00000000000000000000000000000000000000000000000000000000000f4240" + // amountOut
+			"0000000000000000000000000000000000000000000000000152033128214dfd" + // amountInMaximum
+			"0000000000000000000000000000000000000000000000000000000000000042" +
+			// tokenOut first: the path runs backwards
+			"0a78f7ce8d65e0fd4d6b78848483ba3c4fb895c5" + "000bb8" +
+			"848cff46eb323f323b6bbe1df274e40793d7f2c2" + "000bb8" +
+			"4888e4a2ee0f03051c72d2bd3acf755ed3498b3e" +
+			"000000000000000000000000000000000000000000000000000000000000",
+	})
+}
+
+// Both hops of the recorded route charge 3000, so it cannot tell a reversed
+// fee list from an unreversed one. Distinct tiers can: reversed, the path must
+// read CYRUS/500/LUSD/3000/WLUX, pairing each fee with the pool it enters.
+func TestSwapExactOutputReversesFeesWithTheTokens(t *testing.T) {
+	got := swapCall(t, `{"quote":{
+		"chainId":96369,
+		"swapper":"`+trader+`",
+		"input":{"token":"`+wlux+`","amount":"1000000000000000000"},
+		"output":{"token":"`+cyrus+`","amount":"1000000","recipient":"`+trader+`"},
+		"tradeType":"EXACT_OUTPUT","slippage":0.5,
+		"route":[[
+			{"type":"v3-pool","address":"0x0000000000000000000000000000000000000001",
+			 "tokenIn":{"address":"`+wlux+`","chainId":96369,"symbol":"WLUX","decimals":"18"},
+			 "tokenOut":{"address":"`+lusd+`","chainId":96369,"symbol":"LUSD","decimals":"18"},
+			 "fee":"3000","amountIn":"1000000000000000000","amountOut":"57856"},
+			{"type":"v3-pool","address":"0x0000000000000000000000000000000000000002",
+			 "tokenIn":{"address":"`+lusd+`","chainId":96369,"symbol":"LUSD","decimals":"18"},
+			 "tokenOut":{"address":"`+cyrus+`","chainId":96369,"symbol":"CYRUS","decimals":"6"},
+			 "fee":"500","amountIn":"57856","amountOut":"1000000"}]]
+	}}`)
+
+	data, _ := got["data"].(string)
+	want := "0a78f7ce8d65e0fd4d6b78848483ba3c4fb895c5" + "0001f4" + // CYRUS, then its pool's 500
+		"848cff46eb323f323b6bbe1df274e40793d7f2c2" + "000bb8" + // LUSD, then its pool's 3000
+		"4888e4a2ee0f03051c72d2bd3acf755ed3498b3e"
+	if !strings.Contains(data, want) {
+		t.Errorf("packed path is not the reversed route with reversed fees\n got  %s\n want %s inside", data, want)
+	}
+}
