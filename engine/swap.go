@@ -122,6 +122,16 @@ func HandleSwap(chainID int64, router, wrapped string) http.HandlerFunc {
 		tokens := make([]string, 0, len(hops)+1)
 		fees := make([]int64, 0, len(hops))
 		for i, h := range hops {
+			// The quoter prices constant-product pairs as well as concentrated
+			// ones, and this builds only the concentrated router's calls. A
+			// pair has no fee tier to pack into a path, so saying a field is
+			// missing would send someone looking for a field that does not
+			// belong on that hop. Name the venue instead.
+			if h.Type != "" && h.Type != "v3-pool" {
+				badQuote(w, "quote.route hop "+strconv.Itoa(i)+" is a "+h.Type+
+					"; this endpoint builds v3-pool routes")
+				return
+			}
 			// An address is twenty bytes and a fee is a uint24. The path packs
 			// them end to end with nothing marking where one stops, so width is
 			// the only thing that says which is which. Anything narrower or
