@@ -173,7 +173,6 @@ func (idx *Indexer) revalue(parent context.Context) {
 	// Unpriced stays unpriced: no anchor means no bundle and no derivedETH,
 	// never a zero standing in for a number nobody knows.
 	nativeUSD := idx.publishAnchor(prices)
-	idx.publishNativeSupply(ctx)
 
 	// ── Pools: TVL, spot prices, volume ────────────────────────────────
 	//
@@ -254,6 +253,17 @@ func (idx *Indexer) revalue(parent context.Context) {
 		t.DerivedETH = derivedNative(price, nativeUSD, hasPrice)
 		idx.store.SeedToken(addr, t)
 	}
+
+	// After the token rows, not before them.
+	//
+	// This pass reads every token into memory once at the top and writes those
+	// copies back here. Run earlier, the supply landed in the store and was then
+	// overwritten by a copy read before it — so the chain's own coin reported
+	// whatever its wrapper's ERC20 says it has wrapped, and Zoo's two trillion
+	// showed as the fifteen billion sitting in the contract. The write has to be
+	// the last word on the row, because it is the only one that knows what was
+	// minted.
+	idx.publishNativeSupply(ctx, tokens)
 
 	// ── Factory: the landing-page header aggregate ─────────────────────
 	// poolCount is DERIVED here (the true number of pools in the store), not
