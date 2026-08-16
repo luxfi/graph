@@ -74,8 +74,15 @@ func (s *Store) Init(_ context.Context) error {
 		CREATE TABLE IF NOT EXISTS meta      (key TEXT PRIMARY KEY, value TEXT);
 
 		CREATE INDEX IF NOT EXISTS idx_swaps_timestamp ON swaps(timestamp);
-		CREATE INDEX IF NOT EXISTS idx_swaps_pool      ON swaps(pool);
 		CREATE INDEX IF NOT EXISTS idx_entities_type   ON entities(type);
+
+		-- GetSwaps compares pool COLLATE NOCASE and orders by timestamp, and an
+		-- index is used only when its collation matches the comparison. The
+		-- earlier index on swaps(pool) was BINARY, so a pool's history was a full
+		-- scan of every swap on the chain — seconds per pool, and a token page
+		-- asks once per pool it trades in.
+		DROP INDEX IF EXISTS idx_swaps_pool;
+		CREATE INDEX IF NOT EXISTS idx_swaps_pool_time ON swaps(pool COLLATE NOCASE, timestamp);
 	`
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
