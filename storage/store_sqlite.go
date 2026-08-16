@@ -747,10 +747,21 @@ func (s *Store) GetSwaps(_ context.Context, limit int, orderBy, orderDirection s
 	// 1000 newest chain-wide, kept the handful that matched, and usually
 	// answered with none at all. The pool column is indexed for exactly this.
 	args := []interface{}{}
-	query := "SELECT id, data FROM swaps"
+	conds := []string{}
 	if pool, ok := whereString(where, "pool"); ok {
-		query += " WHERE pool = ? COLLATE NOCASE"
+		conds = append(conds, "pool = ? COLLATE NOCASE")
 		args = append(args, pool)
+	}
+	// A page of history is asked for as "the N before this time", and that bound
+	// has to sit beside the LIMIT for the same reason the pool does: applied
+	// after it, the query returns the newest N and then throws them all away.
+	if before, ok := whereNumber(where, "timestamp_lt"); ok {
+		conds = append(conds, "timestamp < ?")
+		args = append(args, before)
+	}
+	query := "SELECT id, data FROM swaps"
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
 	}
 	if orderBy == "timestamp" {
 		if strings.EqualFold(orderDirection, "desc") {
@@ -811,6 +822,20 @@ func whereString(where map[string]interface{}, key string) (string, bool) {
 		return "", false
 	}
 	return s, true
+}
+
+// whereNumber reads a numeric bound out of a `where` map, however the client
+// wrote it — GraphQL variables arrive as float64, literals may arrive as strings.
+func whereNumber(where map[string]interface{}, key string) (float64, bool) {
+	v, ok := where[key]
+	if !ok || v == nil {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(fmt.Sprint(v), 64)
+	if err != nil {
+		return 0, false
+	}
+	return f, true
 }
 
 func (s *Store) swapToMap(id string, sw *SeedSwapData) map[string]interface{} {
