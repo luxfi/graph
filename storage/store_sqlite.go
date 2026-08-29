@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/hanzoai/sqlite"
 )
 
 // Store is the unified storage backend backed by SQLite WAL.
@@ -29,7 +29,14 @@ func New(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("storage: mkdir %s: %w", dataDir, err)
 	}
 	dbPath := filepath.Join(dataDir, "graph.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-64000")
+	// PragmaDSN encodes these in the syntax of whichever backend hanzoai/sqlite
+	// linked (cgo or pure-Go); a hand-written DSN is silently dropped by the other.
+	db, err := sql.Open("sqlite", sqlite.PragmaDSN(dbPath, []sqlite.Pragma{
+		{Name: "busy_timeout", Value: "5000"},
+		{Name: "journal_mode", Value: "WAL"},
+		{Name: "synchronous", Value: "NORMAL"},
+		{Name: "cache_size", Value: "-64000"},
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("storage: open %s: %w", dbPath, err)
 	}

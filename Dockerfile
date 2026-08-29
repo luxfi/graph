@@ -1,9 +1,9 @@
-FROM golang:1.26.3-alpine AS build
+FROM golang:1.26.5-alpine AS build
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 WORKDIR /src
 COPY . .
 ARG VERSION=dev
-# proxy.golang.org caches inconsistently for hanzoai/replicate@v0.6.0
+# proxy.golang.org caches inconsistently for hanzoai/replicate
 # (different POPs serve different zip hashes). -mod=mod populates go.sum
 # from whatever the proxy serves at build time and GOSUMDB=off skips
 # sum.golang.org cross-checks.
