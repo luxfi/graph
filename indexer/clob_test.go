@@ -208,7 +208,7 @@ func TestCLOB_IncrementalAndIdempotent(t *testing.T) {
 // source present but driving only Market/Fill/Order. AMM and DEX never collide.
 func TestCLOB_AdditiveToEVM(t *testing.T) {
 	s := newMemSQLiteStore(t)
-	idx := NewWithConfig(Config{RPC: "http://unused", DexRPC: "http://node/v1/bc/D/dex"}, s)
+	idx := NewWithConfig(Config{RPC: "http://unused", DexRPC: "http://node/v1/chain/D/dex"}, s)
 	if idx.clob == nil {
 		t.Fatal("DexRPC set must construct a CLOB source")
 	}
