@@ -4,7 +4,7 @@
 // on an EVM chain (C-Chain). That is the cross-chain SETTLEMENT view. The native
 // trading engine, however, IS the D-Chain (dexvm): a trade is a consensus state
 // transition matched at Block.Verify, not an EVM event. Its committed state is
-// served by the read RPC at /v1/bc/D/dex/dex_get_{markets,trades,orders,book}
+// served by the read RPC at /v1/chain/D/dex/dex_get_{markets,trades,orders,book}
 // (GET, self-describing JSON; see luxfi/dex pkg/dchain/read.go). Nothing on the
 // EVM side carries those fills, so without this source the dex subgraph stays
 // empty on a native-DEX deployment.
@@ -54,7 +54,7 @@ const clobTradePage = 1000
 // trade cursor and writes Market/Fill/Order entities the dex resolvers read.
 type CLOBSource struct {
 	// base is the D-Chain read-RPC root, e.g.
-	// http://node:9650/v1/bc/D/dex  (dex_get_* are appended as /<method>).
+	// http://node:9650/v1/chain/D/dex  (dex_get_* are appended as /<method>).
 	// Trailing "/" is trimmed on construction so joins are unambiguous.
 	base   string
 	store  *storage.Store
@@ -72,7 +72,7 @@ type CLOBSource struct {
 }
 
 // NewCLOBSource builds a CLOB source for a D-Chain read-RPC base URL and a store.
-// base is the chain's /v1/bc/<D>/dex root (with or without a trailing slash).
+// base is the chain's /v1/chain/<D>/dex root (with or without a trailing slash).
 func NewCLOBSource(base string, store *storage.Store) *CLOBSource {
 	return &CLOBSource{
 		base:  strings.TrimRight(base, "/"),

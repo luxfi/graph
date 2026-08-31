@@ -52,8 +52,8 @@ func TestNoStakeMeansAllCirculates(t *testing.T) {
 // derived rather than configured — nothing to set, nothing to drift.
 func TestPlatformEndpointDerivesFromEVM(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
-		{"https://api.lux.network/v1/bc/C/rpc", "https://api.lux.network/v1/bc/P"},
-		{"http://luxd:9630/v1/bc/C/rpc", "http://luxd:9630/v1/bc/P"},
+		{"https://api.lux.network/v1/chain/C/rpc", "https://api.lux.network/v1/chain/P"},
+		{"http://luxd:9630/v1/chain/C/rpc", "http://luxd:9630/v1/chain/P"},
 	} {
 		got, ok := platformEndpoint(c.in)
 		if !ok || got != c.want {
