@@ -39,9 +39,16 @@ concurrency:
 jobs:
   docker:
     runs-on: [lux-build-linux-amd64]
-    timeout-minutes: 45
+    # The arm64 leg compiles under emulation; 45 minutes was sized for amd64
+    # alone and would abort the release part-way through the second platform.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+
+      # binfmt for the emulated arm64 leg. One job builds both platforms on the
+      # amd64 pool, so without an interpreter registered the arm64 RUN steps
+      # have nothing to execute.
+      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
         with:
@@ -63,13 +70,15 @@ jobs:
             type=semver,pattern={{version}}
             type=sha,prefix=sha-
 
-      # amd64 only. The pool is amd64 and QEMU arm64 emulation takes this build
-      # from minutes to hours; arm64 returns when we own an arm64 runner, as a
-      # native matrix entry.
+      # Both architectures under one manifest list. The lab runs amd64 and
+      # arm64, so a single-arch tag deploys on half of it. arm64 is emulated:
+      # the Dockerfile builds graphd with CGO against sqlite-dev, so the compile
+      # runs inside the target-arch container rather than cross-compiling on
+      # TARGETARCH. Slower, not wrong — see the timeout above.
       - uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           labels: ${{ steps.meta.outputs.labels }}
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=registry,ref=ghcr.io/luxfi/graph:buildcache
