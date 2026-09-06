@@ -90,6 +90,13 @@ func (e *Engine) resolveBundles(ctx context.Context, s *storage.Store, args map[
 	if err != nil {
 		return nil, err
 	}
+	// No bundle is an empty list, not a list holding nothing. A chain with
+	// no wrapped native has no price anchor to publish, and a client
+	// iterating the collection should find no element rather than one it
+	// has to test for null.
+	if b == nil {
+		return []interface{}{}, nil
+	}
 	return []interface{}{b}, nil
 }
 

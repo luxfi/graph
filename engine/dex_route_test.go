@@ -135,3 +135,35 @@ func TestAmmSchema_DoesNotResolveMarkets(t *testing.T) {
 		t.Fatalf("amm schema must resolve `pools`, got: %+v", resp.Errors)
 	}
 }
+
+// TestAmmSchema_BundlesIsEmptyNotNull extends the empty-is-[] rule to the amm
+// schema's one singleton collection.
+//
+// The bundle carries the native coin's USD price. A chain with no wrapped
+// native has no anchor to publish, so there is no bundle — and `bundles` used
+// to answer [null], a list holding nothing, because the resolver wrapped the
+// store's miss instead of reporting it. A client iterating the collection then
+// has to test each element for null, which no other collection here requires.
+func TestAmmSchema_BundlesIsEmptyNotNull(t *testing.T) {
+	s, err := storage.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Init(nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	eng := New(s, &Config{MaxQueryDepth: 10, MaxResultSize: 1 << 20, QueryTimeoutMs: 30000})
+	if err := eng.LoadBuiltin("amm"); err != nil {
+		t.Fatalf("LoadBuiltin(amm): %v", err)
+	}
+
+	resp := eng.Execute(context.Background(), &Request{Query: "{ bundles { id ethPriceUSD } }"})
+	if len(resp.Errors) != 0 {
+		t.Fatalf("unexpected errors: %+v", resp.Errors)
+	}
+	raw, _ := json.Marshal(resp.Data)
+	if strings.Contains(string(raw), "null") {
+		t.Errorf("bundles answered %s; an absent bundle must be an empty list, not a list holding null", raw)
+	}
+}
