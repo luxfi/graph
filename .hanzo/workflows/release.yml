@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   docker:
-    runs-on: [lux-build-linux-amd64]
+    runs-on: [linux-amd64]
     # The arm64 leg compiles under emulation; 45 minutes was sized for amd64
     # alone and would abort the release part-way through the second platform.
     timeout-minutes: 180
