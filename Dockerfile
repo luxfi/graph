@@ -1,4 +1,4 @@
-FROM golang:1.26.5-alpine AS build
+FROM golang:1.26.8-alpine AS build
 ENV GOTOOLCHAIN=auto
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 WORKDIR /src
