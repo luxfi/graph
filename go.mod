@@ -1,6 +1,6 @@
 module github.com/luxfi/graph
 
-go 1.26.8
+go 1.27.1
 
 require (
 	github.com/hanzoai/csqlite v0.1.2
