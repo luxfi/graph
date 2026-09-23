@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -27,10 +28,12 @@ import (
 // Circulating is what is left, and it is the only sound basis for a market cap.
 // Fully diluted value uses the whole minted supply, which is why they differ.
 //
-// The trap worth naming: platform.getCurrentSupply is NOT the token's supply.
-// It is the P-Chain's own counter, and on Lux it reads 13.27 billion against a
-// real supply of two trillion. Trusting it put the market cap out by 150x.
-const nLUX = 1e9
+// The trap worth naming: the P-Chain's current-supply counter is NOT the token's
+// supply. On Lux it reads 13.27 billion against a real supply of two trillion.
+// Trusting it put the market cap out by 150x.
+//
+// The P-Chain counts in microLUX: 1 LUX is 10^6 (luxd utils/units).
+const microLUX = 1e6
 
 // fmtUnits writes a whole-token amount without exponent or separators, so the
 // client parses it as a number rather than guessing at a format.
@@ -55,9 +58,6 @@ func (n NativeSupply) Circulating() float64 {
 	return c
 }
 
-// primaryNetworkID is the ID every chain's own primary network answers to.
-const primaryNetworkID = "11111111111111111111111111111111LpoYY"
-
 // readNativeSupply gathers the three figures.
 func (idx *Indexer) readNativeSupply(ctx context.Context) (NativeSupply, bool) {
 	minted, err := strconv.ParseFloat(idx.genesisSupply, 64)
@@ -73,8 +73,7 @@ func (idx *Indexer) readNativeSupply(ctx context.Context) (NativeSupply, bool) {
 	}
 	if base, ok := platformEndpoint(idx.rpc); ok {
 		// A chain with no validators of its own answers zero, which is honest.
-		out.Staked, _ = idx.platformCall(ctx, base, "platform.getTotalStake",
-			map[string]any{"subnetID": primaryNetworkID}, "stake")
+		out.Staked, _ = idx.totalStake(ctx, base)
 	}
 	return out, true
 }
@@ -101,32 +100,39 @@ func (idx *Indexer) nativeBalance(ctx context.Context, addr string) (float64, bo
 // chains sit beside each other under the same node, so what is staked is one
 // derived URL away and nothing needs configuring.
 func platformEndpoint(evmRPC string) (string, bool) {
-	i := strings.Index(evmRPC, "/bc/")
+	i := strings.Index(evmRPC, "/chain/")
 	if i < 0 {
 		return "", false
 	}
-	return evmRPC[:i] + "/bc/P", true
+	return evmRPC[:i] + "/chain/p", true
 }
 
-// platformCall issues one platform.* call and reads a single nLUX field.
-func (idx *Indexer) platformCall(ctx context.Context, url, method string, params map[string]any, field string) (float64, bool) {
-	raw, err := idx.rpcCallTo(ctx, url, method, params)
+// totalStake reads the primary network's bonded stake in whole LUX:
+// GET <p-chain>/ops/stake/total, answered in microLUX.
+func (idx *Indexer) totalStake(ctx context.Context, platform string) (float64, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, platform+"/ops/stake/total", nil)
 	if err != nil {
 		return 0, false
 	}
-	var out map[string]json.RawMessage
-	if json.Unmarshal(raw, &out) != nil {
+	resp, err := idx.client.Do(req)
+	if err != nil {
 		return 0, false
 	}
-	var s string
-	if json.Unmarshal(out[field], &s) != nil {
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
 		return 0, false
 	}
-	n, ok := new(big.Int).SetString(s, 10)
+	var out struct {
+		Stake string `json:"stake"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return 0, false
+	}
+	n, ok := new(big.Int).SetString(out.Stake, 10)
 	if !ok {
 		return 0, false
 	}
-	f, _ := new(big.Float).Quo(new(big.Float).SetInt(n), big.NewFloat(nLUX)).Float64()
+	f, _ := new(big.Float).Quo(new(big.Float).SetInt(n), big.NewFloat(microLUX)).Float64()
 	return f, true
 }
 

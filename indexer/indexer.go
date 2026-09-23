@@ -392,13 +392,6 @@ func (idx *Indexer) pollGuarded(ctx context.Context) (err error) {
 
 // rpcCall makes a JSON-RPC POST and returns the result field.
 func (idx *Indexer) rpcCall(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
-	return idx.rpcCallTo(ctx, idx.rpc, method, params)
-}
-
-// rpcCallTo is rpcCall against a named endpoint. The chain's other chains — the
-// P-Chain, for what is staked — sit beside the EVM one under the same node, and
-// asking them is the same JSON-RPC with a different path.
-func (idx *Indexer) rpcCallTo(ctx context.Context, url, method string, params interface{}) (json.RawMessage, error) {
 	type rpcReq struct {
 		JSONRPC string      `json:"jsonrpc"`
 		Method  string      `json:"method"`
@@ -418,7 +411,7 @@ func (idx *Indexer) rpcCallTo(ctx context.Context, url, method string, params in
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", idx.rpc, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -485,20 +478,27 @@ type logEntry struct {
 	time int64
 }
 
-func (idx *Indexer) poll(ctx context.Context) error {
-	// 1. Get latest block number
+// head is the chain's latest block number.
+func (idx *Indexer) head(ctx context.Context) (uint64, error) {
 	raw, err := idx.rpcCall(ctx, "eth_blockNumber", []interface{}{})
 	if err != nil {
-		return fmt.Errorf("eth_blockNumber: %w", err)
+		return 0, fmt.Errorf("eth_blockNumber: %w", err)
 	}
-
 	var hexBlock string
 	if err := json.Unmarshal(raw, &hexBlock); err != nil {
-		return fmt.Errorf("parse blockNumber: %w", err)
+		return 0, fmt.Errorf("parse blockNumber: %w", err)
 	}
 	latest, err := parseHexUint64(hexBlock)
 	if err != nil {
-		return fmt.Errorf("parse hex block: %w", err)
+		return 0, fmt.Errorf("parse hex block: %w", err)
+	}
+	return latest, nil
+}
+
+func (idx *Indexer) poll(ctx context.Context) error {
+	latest, err := idx.head(ctx)
+	if err != nil {
+		return err
 	}
 
 	// Capture the genesis-hash baseline (once) before any reset decision, then
@@ -525,7 +525,7 @@ func (idx *Indexer) poll(ctx context.Context) error {
 		"topics":    []interface{}{knownTopics()},
 	}
 
-	raw, err = idx.rpcCall(ctx, "eth_getLogs", []interface{}{filter})
+	raw, err := idx.rpcCall(ctx, "eth_getLogs", []interface{}{filter})
 	if err != nil {
 		return fmt.Errorf("eth_getLogs: %w", err)
 	}

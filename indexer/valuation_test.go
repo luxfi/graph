@@ -322,3 +322,37 @@ func TestRevalue_ValuesSwapsAndPool(t *testing.T) {
 		}
 	}
 }
+
+// A chain re-imported from genesis reports a head far under what the poller has
+// indexed. Its state at that head predates the indexed events, so valuing it
+// would publish near-zero TVL for as long as the import runs. The pass must ask
+// for the head and stop there, without a single balance read.
+func TestRevalue_SkipsWhileHeadIsBehindTheCursor(t *testing.T) {
+	const pool = "0x00000000000000000000000000000000000000a1"
+	s := newMemSQLiteStore(t)
+	s.SeedPool(pool, &storage.SeedPoolData{Token0: "0x0000000000000000000000000000000000000001", Token1: "0x0000000000000000000000000000000000000002"})
+	s.SetLastBlock(650_000)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var q struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		if json.Unmarshal(body, &q) != nil || q.Method != "eth_blockNumber" {
+			t.Errorf("valuation read state behind the cursor: %s", body)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":"0x3e8"}`, q.ID)
+	}))
+	t.Cleanup(srv.Close)
+
+	idx := NewWithConfig(Config{RPC: srv.URL}, s)
+	idx.revalue(context.Background())
+
+	p, _ := s.GetPool(nil, pool)
+	if tvl := fmt.Sprint(p.(map[string]interface{})["totalValueLockedUSD"]); tvl != "" && tvl != "<nil>" {
+		t.Errorf("pool valued at a head behind the cursor: TVL %q", tvl)
+	}
+}

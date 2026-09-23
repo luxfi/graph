@@ -143,6 +143,17 @@ func (idx *Indexer) revalue(parent context.Context) {
 	defer cancel()
 	started := time.Now()
 
+	// Balances are read at the head, so a head far behind the indexed cursor is
+	// older state than the events it would be priced against: a chain being
+	// re-imported from genesis, or a stale backend. Leave the aggregates as they
+	// are until the head catches up.
+	if cursor := idx.store.GetLastBlock(); cursor > reorgDepth {
+		if head, err := idx.head(ctx); err == nil && head+reorgDepth < cursor {
+			idx.logf("[valuation] head %d far behind indexed block %d — skipping (aggregates left as-is)", head, cursor)
+			return
+		}
+	}
+
 	pools := idx.store.PoolsRaw()
 	if len(pools) == 0 {
 		return // nothing indexed yet for this subgraph; silence is correct here

@@ -3,6 +3,8 @@ package indexer
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/luxfi/graph/storage"
@@ -154,5 +156,28 @@ func TestTradedByPoolCoversEveryTrade(t *testing.T) {
 	}
 	if total != 3500 {
 		t.Errorf("protocol total = %v, want 3500 — it is the fold of the pools, not a second sum", total)
+	}
+}
+
+// Stake is read from the P-Chain's REST op beside the C-Chain, in microLUX.
+func TestTotalStakeReadsThePChainOp(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/chain/p/ops/stake/total" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Write([]byte(`{"stake":"15000000000","weight":"15000000000"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	idx := NewWithConfig(Config{RPC: srv.URL + "/v1/chain/c/rpc"}, newMemSQLiteStore(t))
+	base, ok := platformEndpoint(idx.rpc)
+	if !ok {
+		t.Fatal("no P-Chain endpoint derived")
+	}
+	got, ok := idx.totalStake(context.Background(), base)
+	if !ok || got != 15000 {
+		t.Errorf("totalStake = %v,%v; want 15000 LUX", got, ok)
 	}
 }
