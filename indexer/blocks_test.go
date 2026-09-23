@@ -297,3 +297,47 @@ func TestHealDrainsEveryWindow(t *testing.T) {
 		t.Errorf("%d rows still hold a block number after the heal stopped", left)
 	}
 }
+
+// A public JSON-RPC door caps a batch at 100 calls and refuses a larger one
+// whole, answering one error object instead of an array. Every header over a
+// long range still has to be read through such a door.
+func TestBlockTimesFitThroughABatchCap(t *testing.T) {
+	const cap = 100
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch []struct {
+			ID     int           `json:"id"`
+			Params []interface{} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil || len(batch) > cap {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"jsonrpc": "2.0", "id": nil,
+				"error": map[string]interface{}{"code": -32600, "message": "batch size"},
+			})
+			return
+		}
+		out := make([]map[string]interface{}, 0, len(batch))
+		for _, c := range batch {
+			out = append(out, map[string]interface{}{
+				"jsonrpc": "2.0", "id": c.ID,
+				"result": map[string]interface{}{"timestamp": c.Params[0]},
+			})
+		}
+		json.NewEncoder(w).Encode(out)
+	}))
+	defer srv.Close()
+
+	idx := NewWithConfig(Config{RPC: srv.URL, FactoryV3: testFactoryV3}, newMemSQLiteStore(t))
+	blocks := make([]uint64, 0, 3*cap+7)
+	for b := uint64(1); b <= 3*cap+7; b++ {
+		blocks = append(blocks, b)
+	}
+	got := idx.blockTimes(context.Background(), blocks)
+	if len(got) != len(blocks) {
+		t.Fatalf("read %d of %d block times through a %d-call batch cap", len(got), len(blocks), cap)
+	}
+	for _, b := range blocks {
+		if got[b] != int64(b) {
+			t.Fatalf("block %d: time %d, want %d", b, got[b], b)
+		}
+	}
+}

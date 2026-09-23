@@ -24,8 +24,9 @@ import (
 // blockTimeBatch is how many headers one JSON-RPC batch asks for. Headers are
 // small and the node answers them from its index; the bound is here so a first
 // run over a long history is many bounded requests rather than one unbounded
-// one.
-const blockTimeBatch = 256
+// one. 100 is the batch cap a public JSON-RPC door enforces — ours included — and
+// a larger batch is refused whole, with one error object where the array was.
+const blockTimeBatch = 100
 
 // healRetry is how long to wait before re-attempting the one-shot heal. It only
 // ever runs again if the RPC was unreachable, so this is a reconnect delay, not
