@@ -2,3 +2,8 @@
 
 # Build artifacts (CI builds binaries on ARC; never commit local builds)
 /graphd
+
+# Local symlinks to LLM.md
+CLAUDE.md
+AGENTS.md
+GEMINI.md
